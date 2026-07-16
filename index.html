@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BharatPe Audit Tracker — Store Serial Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- AUTH SCREEN -->
+<!-- LOADING SCREEN — shown until we know whether there's an active session -->
+<div id="loadingScreen" class="auth-wrap">
+  <div class="auth-card" style="text-align:center;">
+    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
+    <h1 class="brand-title" style="margin-bottom:10px;font-size:24px;">BharatPe Audit Tracker</h1>
+    <p class="hint" style="margin:0;">Loading…</p>
+  </div>
+</div>
+
+<div id="authScreen" class="auth-wrap" style="display:none;">
+  <div class="auth-card">
+    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
+    <h1 class="brand-title" style="margin-bottom:22px;font-size:24px;">BharatPe Audit Tracker</h1>
+    <div id="authTabs" class="auth-tabs">
+      <button class="auth-tab active" id="authTabSignin" onclick="switchAuthMode('signin')">Sign in</button>
+      <button class="auth-tab" id="authTabSignup" onclick="switchAuthMode('signup')">Sign up</button>
+    </div>
+    <div class="form-field" style="margin-bottom:12px;"><label>Email</label><input id="authEmail" type="email" style="width:100%;" placeholder="you@company.com"></div>
+    <div class="form-field" style="margin-bottom:16px;"><label>Password</label><input id="authPassword" type="password" style="width:100%;" placeholder="••••••••"></div>
+    <button class="btn btn-primary" style="width:100%;" id="authSubmitBtn" onclick="handleAuthSubmit()">Sign in</button>
+    <p id="authMessage" class="auth-message"></p>
+  </div>
+</div>
+
+<!-- PENDING APPROVAL SCREEN -->
+<div id="pendingScreen" class="auth-wrap" style="display:none;">
+  <div class="auth-card">
+    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
+    <h1 class="brand-title" style="margin-bottom:16px;font-size:24px;">BharatPe Audit Tracker</h1>
+    <p class="hint" style="margin-bottom:20px;">Your account (<span id="pendingEmail" style="color:var(--text);"></span>) is created but hasn't been approved yet. Ask your admin to approve your access and assign you to a store — this page will unlock once that's done.</p>
+    <div class="btn-row"><button class="btn" onclick="checkApprovalAgain()">Check again</button><button class="btn btn-danger" onclick="handleSignOut()">Sign out</button></div>
+  </div>
+</div>
+
+<div id="appRoot" style="display:none;">
+<div class="app-shell">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <p class="brand-eyebrow">Serialized inventory · physical verification</p>
+      <h1 class="brand-title">BharatPe Audit Tracker</h1>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-item active admin-only" id="tab-setup" onclick="showStep('setup')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">Setup base data</span>
+          <span class="nav-sub" id="setupSub">Upload the system/expected serial list</span>
+        </span>
+      </div>
+      <div class="nav-item" id="tab-scan" onclick="showStep('scan')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">Scan / upload physical count</span>
+          <span class="nav-sub" id="scanSub">Go store by store</span>
+        </span>
+      </div>
+      <div class="nav-item admin-only" id="tab-dashboard" onclick="showStep('dashboard')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">Dashboard & export</span>
+          <span class="nav-sub" id="dashSub">Reconcile and download</span>
+        </span>
+      </div>
+      <div class="nav-item admin-only" id="tab-admin" onclick="showStep('admin')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 1 1 3.6 2.94"/><path d="M15 20a5 5 0 0 1 5.5-4.97"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">Users & stores</span>
+          <span class="nav-sub">Approve auditors, assign stores</span>
+        </span>
+      </div>
+      <div class="nav-item" id="tab-profile" onclick="showStep('profile')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">My account</span>
+          <span class="nav-sub">Password, assigned stores, delete account</span>
+        </span>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <span class="sidebar-user-email" id="whoAmI"></span>
+        <span class="sidebar-user-role" id="saveIndicator"></span>
+      </div>
+      <button class="btn" onclick="handleSignOut()">Sign out</button>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <div class="content-topbar">
+      <h2 class="content-title">Audit workspace</h2>
+      <div class="cycle-input">
+        <label>Audit cycle name</label>
+        <input id="cycleName" placeholder="PV-2026-Q3" style="width:160px;">
+        <button class="btn" onclick="handleLoadCycle()">Load existing</button>
+        <button class="btn btn-primary admin-only" onclick="handleCreateCycle()">+ New cycle</button>
+        <button class="btn btn-danger admin-only" onclick="handleDeleteCycle()" title="Permanently deletes the connected cycle and all its base data + scans">Delete cycle</button>
+      </div>
+    </div>
+
+  <div class="wrap">
+
+  <div id="globalMessage" style="display:none;background:var(--panel-2);border:1px solid var(--steel);border-radius:12px;padding:10px 16px;font-size:12.5px;margin-bottom:18px;"></div>
+
+  <!-- STEP 1: SETUP -->
+  <div class="panel-view active" id="view-setup">
+    <div class="card">
+      <h4>Upload base / system data</h4>
+      <p class="hint">Upload your base file as-is — it auto-detects <code>LocationCode</code> as store, <code>ItemNo</code> as SKU, and <code>SerialNo</code> (falling back to <code>IMEI</code> if blank) as the serial to reconcile against. Extra columns like Description, MRP, LotNo etc. are ignored. This is locked in as the "expected" list before scanning starts.</p>
+      <div class="upload-zone">
+        <input type="file" id="baseFileInput" accept=".xlsx,.xls,.csv" onchange="handleBaseUpload(event)">
+        <div class="upload-status" id="baseUploadStatus"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" onclick="loadSampleBaseData()">Load sample data instead</button>
+        <button class="btn btn-danger" onclick="clearBaseData()">Clear base data</button>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Base data loaded <span id="baseCount" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;"></span></h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Serial number</th></tr></thead>
+          <tbody id="baseTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 2: SCAN -->
+  <div class="panel-view" id="view-scan">
+    <div class="card">
+      <h4>Select store</h4>
+      <p class="hint">Pick the store you're currently auditing. Scan serials with a barcode scanner (it types + presses Enter automatically) or type them manually, or upload an Excel of pre-scanned serials for this store. Note: if your uploaded file already has its own store/location column, that value is used instead of the dropdown — so a multi-store file will correctly split across stores, but a single-store file with a leftover store column from another export could get misattributed. Leave that column out if you want everything in the file counted under the selected store.</p>
+      <div class="scan-store-select">
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Store</label><select id="scanStoreSelect" style="width:100%;" onchange="renderScanView()"></select></div>
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Upload scanned Excel for this store</label><input type="file" id="scanFileInput" accept=".xlsx,.xls,.csv" onchange="handleScanUpload(event)" style="width:100%;"></div>
+      </div>
+      <div class="scan-progress" id="scanProgress"></div>
+      <div class="scan-input-row">
+        <input id="scanInput" placeholder="Scan or type a serial number, then press Enter" onkeydown="if(event.key==='Enter'){addScan();}">
+        <button class="btn btn-primary" onclick="addScan()">Add</button>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Scanned so far for this store</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Serial number</th><th>SKU</th><th>Time</th><th></th></tr></thead>
+          <tbody id="scanTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="completeAudit()">Complete audit &amp; build dashboard</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: DASHBOARD -->
+  <div class="panel-view" id="view-dashboard">
+    <div class="status-strip" id="auditStatusStrip">Audit not yet completed. Go to step 2 and click "Complete audit" when scanning is finished.</div>
+
+    <div class="kpi-strip" id="kpiStrip"></div>
+
+    <h3 class="section-title">Store results</h3>
+    <div class="tag-grid" id="storeGrid"></div>
+
+    <h3 class="section-title">Variance overview</h3>
+    <div class="charts-row">
+      <div class="chart-panel">
+        <h4>Match vs variance by store</h4>
+        <div style="position:relative;height:260px;">
+          <canvas id="storeChart" role="img" aria-label="Bar chart comparing matched versus variance serial counts per store"></canvas>
+        </div>
+      </div>
+      <div class="chart-panel">
+        <h4>Variance by type</h4>
+        <div style="position:relative;height:260px;">
+          <canvas id="varianceChart" role="img" aria-label="Doughnut chart of variance records grouped by match, short and excess"></canvas>
+        </div>
+        <div id="varLegend" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;font-size:11.5px;color:var(--text-dim);"></div>
+      </div>
+    </div>
+
+    <h3 class="section-title">Full reconciliation detail</h3>
+    <div class="table-wrap" style="max-height:400px;">
+      <table>
+        <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Physical scan serial</th><th>System serial</th><th>Status</th></tr></thead>
+        <tbody id="detailTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="btn-row" style="margin-top:18px;">
+      <button class="btn btn-primary" onclick="downloadExcel()">Download Excel report</button>
+      <button class="btn btn-danger" onclick="resetEverything()">Start a new audit cycle</button>
+    </div>
+  </div>
+
+  <!-- ADMIN -->
+  <div class="panel-view" id="view-admin">
+    <div class="card">
+      <h4>Pending approval</h4>
+      <p class="hint">New sign-ups appear here with no access until you approve them.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Email</th><th>Signed up</th><th></th></tr></thead>
+        <tbody id="pendingUsersBody"></tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <h4>Approved users & store assignments</h4>
+      <p class="hint">Check the stores each auditor should have access to. Unchecking removes their access to that store immediately.</p>
+      <div id="approvedUsersList"></div>
+    </div>
+  </div>
+
+  <!-- PROFILE -->
+  <div class="panel-view" id="view-profile">
+    <div class="card">
+      <h4>Account</h4>
+      <div id="profileInfo" style="font-family:var(--font-mono);font-size:12.5px;color:var(--text-dim);margin-bottom:8px;"></div>
+    </div>
+    <div class="card">
+      <h4>Change password</h4>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;max-width:500px;">
+        <div class="form-field"><label>New password</label><input id="newPassword" type="password" placeholder="At least 6 characters"></div>
+        <div class="form-field"><label>Confirm new password</label><input id="confirmPassword" type="password" placeholder="Repeat it"></div>
+      </div>
+      <button class="btn btn-primary" onclick="handleChangePassword()">Update password</button>
+    </div>
+    <div class="card">
+      <h4 style="color:var(--red);">Delete my account</h4>
+      <p class="hint">This immediately removes your access, store assignments, and admin/user role. Your scan history stays intact for the audit trail, just no longer linked to an active account. This does not free up your email for reuse — contact another admin if you need that done fully.</p>
+      <button class="btn btn-danger" onclick="handleDeleteOwnAccount()">Delete my account</button>
+    </div>
+  </div>
+
+  </div>
+  </main>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

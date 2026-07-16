@@ -1,0 +1,13 @@
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Local env files, if you ever add build tooling later
+.env
+.env.local
+
+# Node, if you ever add tooling (not currently used by this static site)
+node_modules/
