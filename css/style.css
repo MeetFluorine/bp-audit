@@ -135,6 +135,10 @@ tbody tr:hover{background:var(--panel-2);}
 .auth-tab{flex:1;background:var(--panel-2);border:none;color:var(--text-dim);padding:10px;font-family:var(--font-body);font-size:12.5px;cursor:pointer;font-weight:600;}
 .auth-tab.active{background:var(--steel);color:#08150D;}
 .auth-message{font-size:12px;margin-top:14px;min-height:16px;}
+.password-wrap{position:relative;}
+.password-wrap input{padding-right:38px;width:100%;}
+.password-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;padding:5px;cursor:pointer;color:var(--text-faint);display:flex;align-items:center;}
+.password-toggle:hover{color:var(--steel);}
 .auth-message.error{color:var(--red);}
 .auth-message.ok{color:var(--green);}
 

@@ -13,6 +13,16 @@ let currentProfile = null;   // { role, approved }
 let myAssignedStores = [];   // store codes this user can access (empty for admin = all)
 let authMode = 'signin';
 
+function togglePasswordVisibility(inputId, btn){
+  const input = document.getElementById(inputId);
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  btn.querySelector('.eye-open').style.display = showing ? '' : 'none';
+  btn.querySelector('.eye-closed').style.display = showing ? 'none' : '';
+  btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  btn.setAttribute('title', showing ? 'Show password' : 'Hide password');
+}
+
 function switchAuthMode(mode){
   authMode = mode;
   document.getElementById('authTabSignin').classList.toggle('active', mode==='signin');
@@ -781,9 +791,9 @@ function renderCharts(stores){
 function buildDetailRowsForExcel(rows){
   return rows.map((r,i) => ({
     'Sr. No.': i+1,
-    'Physical scan serial number': r.physicalSerial || '',
-    'SKU': r.sku || '',
     'System scan serial number': r.systemSerial || '',
+    'SKU': r.sku || '',
+    'Physical scan serial number': r.physicalSerial || '',
     'Match': r.status==='match' ? 'Match' : '',
     'Excess': r.status==='excess' ? 'Excess' : '',
     'Short': r.status==='short' ? 'Short' : ''
@@ -805,7 +815,7 @@ function downloadExcel(){
 
   const detailRows = detailResults.map((r,i) => ({
     'Sr. No.': i+1, Store:r.store, Circle:circleFor(r.store),
-    'Physical scan serial number': r.physicalSerial || '', SKU: r.sku || '', 'System scan serial number': r.systemSerial || '',
+    'System scan serial number': r.systemSerial || '', SKU: r.sku || '', 'Physical scan serial number': r.physicalSerial || '',
     'Match': r.status==='match' ? 'Match' : '', 'Excess': r.status==='excess' ? 'Excess' : '', 'Short': r.status==='short' ? 'Short' : ''
   }));
   const scanLogRows = scanData.map(r => ({Store:r.store, Circle:circleFor(r.store), SKU:r.sku, 'Serial Number':r.serial, 'Scanned at':r.ts}));
