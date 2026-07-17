@@ -124,7 +124,7 @@
 
   <div class="wrap">
 
-  <div id="globalMessage" style="display:none;background:var(--panel-2);border:1px solid var(--steel);border-radius:12px;padding:10px 16px;font-size:12.5px;margin-bottom:18px;"></div>
+  <div id="globalMessage" style="display:none;position:fixed;top:18px;left:50%;transform:translateX(-50%);background:var(--panel-2);border:1px solid var(--steel);border-radius:12px;padding:12px 20px;font-size:12.5px;box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:9999;max-width:min(680px,90vw);text-align:center;"></div>
 
   <!-- STEP 1: SETUP -->
   <div class="panel-view active" id="view-setup">
@@ -160,10 +160,11 @@
         <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Store</label><select id="scanStoreSelect" style="width:100%;" onchange="renderScanView()"></select></div>
         <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Upload scanned Excel for this store</label><input type="file" id="scanFileInput" accept=".xlsx,.xls,.csv" onchange="handleScanUpload(event)" style="width:100%;"></div>
       </div>
+      <div id="lockBanner"></div>
       <div class="scan-progress" id="scanProgress"></div>
       <div class="scan-input-row">
         <input id="scanInput" placeholder="Scan or type a serial number, then press Enter" onkeydown="if(event.key==='Enter'){addScan();}">
-        <button class="btn btn-primary" onclick="addScan()">Add</button>
+        <button class="btn btn-primary" id="scanAddBtn" onclick="addScan()">Add</button>
       </div>
     </div>
     <div class="card">
@@ -176,13 +177,16 @@
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-primary" onclick="completeAudit()">Complete audit &amp; build dashboard</button>
+      <button class="btn btn-primary" id="completeAuditBtn" onclick="completeAudit()">Complete audit &amp; build dashboard</button>
     </div>
   </div>
 
   <!-- STEP 3: DASHBOARD -->
   <div class="panel-view" id="view-dashboard">
-    <div class="status-strip" id="auditStatusStrip">Audit not yet completed. Go to step 2 and click "Complete audit" when scanning is finished.</div>
+    <div class="status-strip" id="auditStatusStrip" style="justify-content:flex-start;gap:14px;">
+      <span id="auditStatusText" style="flex:1;">Audit not yet completed. Go to step 2 and click "Complete audit" when scanning is finished.</span>
+      <button class="btn" onclick="manualRefreshDashboard()" title="Fetch the latest scans right now">↻ Refresh now</button>
+    </div>
 
     <div class="kpi-strip" id="kpiStrip"></div>
 
@@ -207,6 +211,10 @@
     </div>
 
     <h3 class="section-title">Full reconciliation detail</h3>
+    <div class="detail-toolbar">
+      <input id="detailSearch" placeholder="Search serial, SKU, or store…" oninput="renderDashboard()">
+      <span id="detailFilterBar" class="detail-filter-bar">Showing all stores — click a store card above to filter</span>
+    </div>
     <div class="table-wrap" style="max-height:400px;">
       <table>
         <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Physical scan serial</th><th>System serial</th><th>Status</th></tr></thead>

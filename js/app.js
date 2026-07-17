@@ -3,8 +3,15 @@ let currentCycleName = '';
 
 let baseData = [];
 let scanData = [];
+let storeLocks = [];
 let detailResults = [];
 let auditCompleted = false;
+let dashboardStoreFilter = null;
+
+function setDashboardStoreFilter(store){
+  dashboardStoreFilter = (dashboardStoreFilter === store) ? null : store;
+  renderDashboard();
+}
 let storeChartInstance = null, varianceChartInstance = null;
 
 // ---------------- AUTH & ROLES ----------------
@@ -335,9 +342,11 @@ async function connectToCycle(cycle){
   currentCycleId = cycle.id;
   currentCycleName = cycle.cycle_name;
   auditCompleted = !!cycle.completed;
+  dashboardStoreFilter = null;
   await fetchCycleData();
   renderBaseTable();
   populateStoreSelect();
+  renderScanView();
   if(auditCompleted) reconcile();
   renderDashboard();
 }
@@ -445,6 +454,14 @@ async function fetchCycleData(){
   const { data: scanRows, error: scanErr } = await sb.from('scans').select('*').eq('cycle_id', currentCycleId);
   if(scanErr) throw scanErr;
   scanData = (scanRows||[]).map(r => ({id:r.id, store:r.store_code, sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), scannedBy:r.scanned_by}));
+
+  const { data: lockRows, error: lockErr } = await sb.from('store_locks').select('*').eq('cycle_id', currentCycleId);
+  if(lockErr) throw lockErr;
+  storeLocks = (lockRows||[]).map(r => ({store:r.store_code, lockedBy:r.locked_by, lockedByEmail:r.locked_by_email, lockedAt:new Date(r.locked_at).toLocaleString()}));
+}
+
+function getStoreLock(store){
+  return storeLocks.find(l => l.store === store) || null;
 }
 
 function requireCycle(){
@@ -482,10 +499,36 @@ function showStep(step){
   const pageTitles = {setup:'Setup base data', scan:'Scan / upload physical count', dashboard:'Dashboard & export', admin:'Users & stores', profile:'My account'};
   const titleEl = document.querySelector('.content-title');
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
+  stopDashboardPolling();
   if(step==='scan') renderScanView();
-  if(step==='dashboard') renderDashboard();
+  if(step==='dashboard'){ renderDashboard(); if(currentProfile && currentProfile.role === 'admin') startDashboardPolling(); }
   if(step==='admin') renderAdminPanel();
   if(step==='profile') renderProfilePanel();
+}
+
+let dashboardPollTimer = null;
+function startDashboardPolling(){
+  stopDashboardPolling();
+  dashboardPollTimer = setInterval(async () => {
+    if(!currentCycleId) return;
+    try{ await fetchCycleData(); renderDashboard(); }
+    catch(e){ console.error('Live refresh failed', e); }
+  }, 15000);
+}
+function stopDashboardPolling(){
+  if(dashboardPollTimer){ clearInterval(dashboardPollTimer); dashboardPollTimer = null; }
+}
+
+async function manualRefreshDashboard(){
+  if(!requireCycle()) return;
+  try{
+    await fetchCycleData();
+    renderDashboard();
+    showMessage('Dashboard refreshed.');
+  }catch(e){
+    console.error(e);
+    showMessage('Could not refresh: ' + errMsg(e), true);
+  }
 }
 
 function parseWorkbook(file, callback){
@@ -612,7 +655,10 @@ function populateStoreSelect(){
   }
   const sel = document.getElementById('scanStoreSelect');
   const prev = sel.value;
-  sel.innerHTML = stores.length ? stores.map(s => `<option value="${s}">${s}</option>`).join('') : '<option value="">No stores assigned — contact your admin</option>';
+  const placeholder = '<option value="">— Please select store —</option>';
+  sel.innerHTML = stores.length
+    ? placeholder + stores.map(s => `<option value="${s}">${s}</option>`).join('')
+    : '<option value="">No stores assigned — contact your admin</option>';
   if(stores.includes(prev)) sel.value = prev;
 }
 
@@ -653,37 +699,95 @@ async function removeScan(id){
 function renderScanView(){
   populateStoreSelect();
   const store = document.getElementById('scanStoreSelect').value;
+  const isAdmin = currentProfile && currentProfile.role === 'admin';
+  const lock = store ? getStoreLock(store) : null;
+  const locked = !!lock;
+
   const baseForStore = baseData.filter(b => b.store === store);
   const scansForStore = scanData.filter(r => r.store === store);
 
-  document.getElementById('scanProgress').innerHTML = `
+  document.getElementById('scanProgress').innerHTML = store ? `
     <span>Expected here: <b>${baseForStore.length}</b></span>
     <span>Scanned here: <b>${scansForStore.length}</b></span>
-    <span>Remaining: <b>${Math.max(baseForStore.length - scansForStore.length,0)}</b></span>`;
+    <span>Remaining: <b>${Math.max(baseForStore.length - scansForStore.length,0)}</b></span>` : '';
+
+  const lockBanner = document.getElementById('lockBanner');
+  if(locked){
+    lockBanner.innerHTML = `<div class="lock-banner">
+      🔒 <b>${store}</b> was submitted and locked on ${lock.lockedAt}${lock.lockedByEmail ? ' by ' + lock.lockedByEmail : ''}.
+      ${isAdmin ? `<button class="btn" style="margin-left:10px;" onclick="unlockStore('${store.replace(/'/g,"\\'")}')">Unlock this store</button>` : 'No further scans, uploads, or deletions are allowed until an admin reopens it.'}
+    </div>`;
+  } else {
+    lockBanner.innerHTML = '';
+  }
+
+  const inputsDisabled = store ? (locked && !isAdmin) : true;
+  document.getElementById('scanInput').disabled = inputsDisabled;
+  document.getElementById('scanAddBtn').disabled = inputsDisabled;
+  document.getElementById('scanFileInput').disabled = inputsDisabled;
+
+  const completeBtn = document.getElementById('completeAuditBtn');
+  if(isAdmin){
+    completeBtn.textContent = 'Complete audit & build dashboard';
+    completeBtn.disabled = false;
+  } else {
+    completeBtn.textContent = locked ? 'Store already submitted' : 'Submit & lock this store\u2019s audit';
+    completeBtn.disabled = !store || locked;
+  }
 
   const tbody = document.getElementById('scanTableBody');
   if(!scansForStore.length){ tbody.innerHTML = '<tr><td colspan="4" class="empty-note">No serials scanned for this store yet.</td></tr>'; return; }
-  const canDeleteAny = currentProfile && currentProfile.role === 'admin';
+  const canDeleteAny = isAdmin;
   tbody.innerHTML = scansForStore.slice().reverse().map(r => {
     const isMine = currentUser && r.scannedBy === currentUser.id;
-    const delIcon = (canDeleteAny || isMine) ? `<span style="color:var(--text-faint);cursor:pointer;" onclick="removeScan('${r.id}')">✕</span>` : '<span style="color:var(--text-faint);">—</span>';
+    const canDelete = (canDeleteAny || isMine) && !(locked && !isAdmin);
+    const delIcon = canDelete ? `<span style="color:var(--text-faint);cursor:pointer;" onclick="removeScan('${r.id}')">✕</span>` : '<span style="color:var(--text-faint);">—</span>';
     return `<tr><td>${r.serial}</td><td>${r.sku||'—'}</td><td>${r.ts}</td><td>${delIcon}</td></tr>`;
   }).join('');
 }
 
+async function unlockStore(store){
+  confirmAction('unlock-'+store, `This reopens ${store} for editing`, async () => {
+    try{
+      const { error } = await sb.from('store_locks').delete().eq('cycle_id', currentCycleId).eq('store_code', store);
+      if(error) throw error;
+      await fetchCycleData();
+      showMessage(`${store} has been unlocked.`);
+      renderScanView();
+    }catch(e){
+      console.error(e);
+      showMessage('Could not unlock store: ' + errMsg(e), true);
+    }
+  });
+}
+
 function completeAudit(){
   if(!requireCycle()) return;
-  if(!baseData.length){ showMessage('Upload base data in step 1 before completing the audit.', true); return; }
 
   const isAdmin = currentProfile && currentProfile.role === 'admin';
 
   if(!isAdmin){
-    confirmAction('user-complete', 'This marks your scanning as done for this cycle', () => {
-      showMessage('Your scans have been recorded. Your admin will finalize this audit cycle once every store is done.');
+    const store = document.getElementById('scanStoreSelect').value;
+    if(!store){ showMessage('Select a store first.', true); return; }
+    if(getStoreLock(store)){ showMessage(`${store} is already submitted and locked.`, true); return; }
+    confirmAction('user-complete', `This locks ${store} — no further edits until an admin reopens it`, async () => {
+      try{
+        const { error } = await sb.from('store_locks').insert({
+          cycle_id: currentCycleId, store_code: store, locked_by: currentUser.id, locked_by_email: currentUser.email
+        });
+        if(error) throw error;
+        await fetchCycleData();
+        showMessage(`${store} submitted and locked. Your admin will finalize the full audit once every store is done.`);
+        renderScanView();
+      }catch(e){
+        console.error(e);
+        showMessage('Could not submit this store: ' + errMsg(e), true);
+      }
     });
     return;
   }
 
+  if(!baseData.length){ showMessage('Upload base data in step 1 before completing the audit.', true); return; }
   confirmAction('complete-audit', 'This will lock in results for the dashboard', async () => {
     try{
       const { error } = await sb.from('audit_cycles').update({completed:true, completed_at:new Date().toISOString()}).eq('id', currentCycleId);
@@ -720,12 +824,13 @@ function renderDashboard(){
   reconcile(); // always show live results — "completed" only locks the cycle, it doesn't gate visibility
 
   const strip = document.getElementById('auditStatusStrip');
+  const stripText = document.getElementById('auditStatusText');
   const auditedCount = [...new Set(scanData.map(r=>r.store))].filter(Boolean).length;
   if(!auditCompleted){
-    strip.textContent = `Live — showing current results for ${auditedCount} store${auditedCount===1?'':'s'} scanned so far. Click "Complete audit" once every store is done to lock this cycle.`;
+    stripText.textContent = `Live — showing current results for ${auditedCount} store${auditedCount===1?'':'s'} scanned so far. Click "Complete audit" once every store is done to lock this cycle. Auto-refreshes every 15s.`;
     strip.classList.remove('locked');
   } else {
-    strip.textContent = `Audit "${document.getElementById('cycleName').value || 'Untitled cycle'}" completed — showing final results for ${auditedCount} store${auditedCount===1?'':'s'} scanned.`;
+    stripText.textContent = `Audit "${document.getElementById('cycleName').value || 'Untitled cycle'}" completed — showing final results for ${auditedCount} store${auditedCount===1?'':'s'} scanned.`;
     strip.classList.add('locked');
   }
 
@@ -739,13 +844,13 @@ function renderDashboard(){
   const match = detailResults.filter(r=>r.status==='match').length;
   const short = detailResults.filter(r=>r.status==='short').length;
   const excess = detailResults.filter(r=>r.status==='excess').length;
-  const matchPct = total ? Math.round((match/total)*100) : 0;
+  const matchPct = total ? ((match/total)*100).toFixed(2) : '0.00';
 
   const kpis = [
     {cls:'k-recorded', label:'Store audit recorded', value: storesRecorded, sub:'Stores with at least 1 scan'},
     {cls:'k-pending', label:'Store audit pending', value: storesPending, sub:'Stores with base data, not yet scanned'},
     {cls:'k-total', label:'Stock scanned (physical)', value: totalScanned, sub:'Raw physical scan count'},
-    {cls:'k-match', label:'Match rate', value: matchPct+'%', sub:`${match} matched`},
+    {cls:'k-match', label:'Match rate', value: matchPct+'%', sub:`${match} of ${total} matched`},
     {cls:'k-variance', label:'Total variance', value: short+excess, sub:'Short + excess'},
     {cls:'k-missing', label:'Short (missing)', value: short, sub:'In system, not found'},
     {cls:'k-excess', label:'Excess (unlisted)', value: excess, sub:'Found, not in system'}
@@ -753,18 +858,25 @@ function renderDashboard(){
   document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
     <div class="kpi ${k.cls}"><p class="kpi-label">${k.label}</p><p class="kpi-value">${k.value}</p><p class="kpi-sub">${k.sub}</p></div>`).join('');
 
-  const stores = [...new Set(detailResults.map(r=>r.store))].sort();
+  let stores = [...new Set(detailResults.map(r=>r.store))];
+  // Worst-variance-first so problem stores surface immediately, not buried alphabetically
+  stores.sort((a,b) => {
+    const va = detailResults.filter(r=>r.store===a && r.status!=='match').length;
+    const vb = detailResults.filter(r=>r.store===b && r.status!=='match').length;
+    return vb - va || a.localeCompare(b);
+  });
   document.getElementById('storeGrid').innerHTML = stores.length ? stores.map(store => {
     const rows = detailResults.filter(r=>r.store===store);
     const m = rows.filter(r=>r.status==='match').length;
     const sh = rows.filter(r=>r.status==='short').length;
     const ex = rows.filter(r=>r.status==='excess').length;
     const t = rows.length;
-    const pct = t ? Math.round((m/t)*100) : 0;
-    let stamp = sh>0 ? '<span class="stamp stamp-critical">Missing units</span>' : (ex>0 || pct<100 ? '<span class="stamp stamp-variance">Variance</span>' : '<span class="stamp stamp-match">Matched</span>');
-    return `<div class="store-tag">
+    const pct = t ? ((m/t)*100).toFixed(2) : '0.00';
+    let stamp = sh>0 ? '<span class="stamp stamp-critical">Missing units</span>' : (ex>0 || m<t ? '<span class="stamp stamp-variance">Variance</span>' : '<span class="stamp stamp-match">Matched</span>');
+    const isFiltered = dashboardStoreFilter === store;
+    return `<div class="store-tag${isFiltered?' store-tag-selected':''}" onclick="setDashboardStoreFilter('${store.replace(/'/g,"\\'")}')" title="Click to filter the detail table below to this store">
       <div class="store-tag-hole"></div>
-      <span class="store-download" onclick="downloadStoreExcel('${store.replace(/'/g,"\\'")}')" title="Download this store's report">↓ Export</span>
+      <span class="store-download" onclick="event.stopPropagation();downloadStoreExcel('${store.replace(/'/g,"\\'")}')" title="Download this store's report">↓ Export</span>
       <div class="store-tag-body">
       <p class="store-tag-name">${store}</p>
       <p class="store-tag-meta">Circle ${circleFor(store)} · Expected ${t-ex} · Found ${t-sh}</p>
@@ -772,11 +884,27 @@ function renderDashboard(){
       ${stamp}</div></div>`;
   }).join('') : '<div class="empty-note">No stores scanned yet — complete at least one store in step 2 to see results here.</div>';
 
+  const filteredDetail = dashboardStoreFilter ? detailResults.filter(r=>r.store===dashboardStoreFilter) : detailResults;
+  const searchTerm = (document.getElementById('detailSearch') ? document.getElementById('detailSearch').value : '').trim().toLowerCase();
+  const searchedDetail = searchTerm ? filteredDetail.filter(r =>
+    (r.physicalSerial||'').toLowerCase().includes(searchTerm) ||
+    (r.systemSerial||'').toLowerCase().includes(searchTerm) ||
+    (r.sku||'').toLowerCase().includes(searchTerm) ||
+    (r.store||'').toLowerCase().includes(searchTerm)
+  ) : filteredDetail;
+
+  const filterBar = document.getElementById('detailFilterBar');
+  if(filterBar){
+    filterBar.innerHTML = dashboardStoreFilter
+      ? `Filtered to <b>${dashboardStoreFilter}</b> <span class="clear-filter" onclick="setDashboardStoreFilter(null)">✕ clear</span>`
+      : 'Showing all stores — click a store card above to filter';
+  }
+
   const detailBody = document.getElementById('detailTableBody');
-  detailBody.innerHTML = detailResults.length ? detailResults.map(r => `
+  detailBody.innerHTML = searchedDetail.length ? searchedDetail.map(r => `
     <tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.physicalSerial||'—'}</td><td>${r.systemSerial||'—'}</td>
     <td><span class="badge badge-${r.status}">${r.status.charAt(0).toUpperCase()+r.status.slice(1)}</span></td></tr>`).join('')
-    : '<tr><td colspan="6" class="empty-note">No reconciliation data yet.</td></tr>';
+    : '<tr><td colspan="6" class="empty-note">No matching records.</td></tr>';
 
   renderCharts(stores);
 }
@@ -793,9 +921,16 @@ function renderCharts(stores){
       {label:'Variance', data:varianceData, backgroundColor:'#E2635C', borderRadius:6, maxBarThickness:26}
     ]},
     options:{responsive:true, maintainAspectRatio:false,
+      onClick:(evt, elements) => {
+        if(elements.length){ setDashboardStoreFilter(stores[elements[0].index]); }
+      },
+      onHover:(evt, elements) => { evt.native.target.style.cursor = elements.length ? 'pointer' : 'default'; },
       scales:{x:{stacked:true, grid:{display:false}, ticks:{color:'#96A69B', font:{size:11}}},
               y:{stacked:true, beginAtZero:true, ticks:{color:'#96A69B', font:{size:11}, precision:0}, grid:{color:'#1E2822'}}},
-      plugins:{legend:{display:false}}}
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{footer:() => 'Click a bar to filter the table below'}}
+      }}
   });
 
   const counts = {match:0, short:0, excess:0};
@@ -808,12 +943,16 @@ function renderCharts(stores){
   varianceChartInstance = new Chart(document.getElementById('varianceChart'), {
     type:'doughnut',
     data:{labels:keys.map(k=>labels[k]), datasets:[{data:keys.map(k=>counts[k]), backgroundColor:keys.map(k=>colors[k]), borderColor:'#131A16', borderWidth:2}]},
-    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}}
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:(ctx) => {
+        const t = keys.reduce((s,k)=>s+counts[k],0) || 1;
+        return `${ctx.label}: ${ctx.raw} (${((ctx.raw/t)*100).toFixed(2)}%)`;
+      }}}}}
   });
 
   const total = detailResults.length || 1;
   document.getElementById('varLegend').innerHTML = keys.map(k => `
-    <span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:2px;background:${colors[k]};display:inline-block;"></span>${labels[k]} ${Math.round((counts[k]/total)*100)}%</span>`).join('');
+    <span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:2px;background:${colors[k]};display:inline-block;"></span>${labels[k]} ${((counts[k]/total)*100).toFixed(2)}%</span>`).join('');
 }
 
 function buildDetailRowsForExcel(rows){
@@ -838,7 +977,7 @@ function downloadExcel(){
     const m = rows.filter(r=>r.status==='match').length;
     const sh = rows.filter(r=>r.status==='short').length;
     const ex = rows.filter(r=>r.status==='excess').length;
-    return {Store:store, Circle:circleFor(store), 'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex, 'Match %': m+sh ? Math.round((m/(m+sh))*100) : 0};
+    return {Store:store, Circle:circleFor(store), 'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex, 'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '0.00'};
   });
 
   const detailRows = detailResults.map((r,i) => ({

@@ -97,7 +97,20 @@ create trigger on_auth_user_created
   for each row execute function handle_new_user();
 
 -- ------------------------------------------------------------
--- 6. USER_STORES — which stores each user may audit
+-- 6. STORE_LOCKS — once an auditor submits a store's scan work,
+--     it locks (no more add/delete/upload) until an admin unlocks it.
+-- ------------------------------------------------------------
+create table if not exists store_locks (
+  cycle_id uuid references audit_cycles(id) on delete cascade,
+  store_code text references stores(store_code) on update cascade,
+  locked_by uuid references auth.users(id) on delete set null,
+  locked_by_email text,
+  locked_at timestamptz default now(),
+  primary key (cycle_id, store_code)
+);
+
+-- ------------------------------------------------------------
+-- 7. USER_STORES — which stores each user may audit
 -- ------------------------------------------------------------
 create table if not exists user_stores (
   user_id uuid references profiles(id) on delete cascade,
@@ -106,7 +119,7 @@ create table if not exists user_stores (
 );
 
 -- ------------------------------------------------------------
--- 7. HELPER FUNCTIONS (security definer — safe for RLS to call
+-- 8. HELPER FUNCTIONS (security definer — safe for RLS to call
 --    without recursive policy checks)
 -- ------------------------------------------------------------
 create or replace function is_admin()
@@ -126,8 +139,15 @@ returns boolean language sql security definer set search_path = public stable as
   );
 $$;
 
+create or replace function is_store_locked(target_cycle uuid, target_store text)
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (
+    select 1 from store_locks where cycle_id = target_cycle and store_code = target_store
+  );
+$$;
+
 -- ------------------------------------------------------------
--- 8. ROW LEVEL SECURITY — final policy set
+-- 9. ROW LEVEL SECURITY — final policy set
 -- ------------------------------------------------------------
 alter table stores enable row level security;
 alter table audit_cycles enable row level security;
@@ -135,6 +155,7 @@ alter table base_serials enable row level security;
 alter table scans enable row level security;
 alter table profiles enable row level security;
 alter table user_stores enable row level security;
+alter table store_locks enable row level security;
 
 -- Drop-if-exists first so this file is safe to re-run.
 drop policy if exists "approved users read stores" on stores;
@@ -154,6 +175,9 @@ drop policy if exists "users delete own profile" on profiles;
 drop policy if exists "users can create own profile" on profiles;
 drop policy if exists "read own store assignments" on user_stores;
 drop policy if exists "admins manage store assignments" on user_stores;
+drop policy if exists "approved users read store locks" on store_locks;
+drop policy if exists "users lock their own assigned stores" on store_locks;
+drop policy if exists "admins unlock any store" on store_locks;
 
 -- STORES: any approved, logged-in person can read the store master
 create policy "approved users read stores" on stores for select using (is_approved());
@@ -170,13 +194,15 @@ create policy "scoped read base_serials" on base_serials for select
 create policy "admins insert base_serials" on base_serials for insert with check (is_admin());
 
 -- SCANS: users insert/read only within their assigned stores;
--- deletion restricted to rows they personally scanned (admins: anything)
+-- deletion restricted to rows they personally scanned (admins: anything).
+-- A locked store (store_locks) blocks non-admin inserts/deletes entirely —
+-- this is real enforcement, not just a UI toggle.
 create policy "scoped read scans" on scans for select
   using (is_admin() or has_store_access(store_code));
 create policy "scoped insert scans" on scans for insert
-  with check (is_admin() or has_store_access(store_code));
+  with check (is_admin() or (has_store_access(store_code) and not is_store_locked(cycle_id, store_code)));
 create policy "delete own scans" on scans for delete
-  using (is_admin() or scanned_by = auth.uid());
+  using (is_admin() or (scanned_by = auth.uid() and not is_store_locked(cycle_id, store_code)));
 
 -- PROFILES: everyone reads their own; admins read/update/delete all;
 -- anyone can (re)create their own profile row (covers re-signup after
@@ -191,8 +217,14 @@ create policy "users can create own profile" on profiles for insert with check (
 create policy "read own store assignments" on user_stores for select using (user_id = auth.uid() or is_admin());
 create policy "admins manage store assignments" on user_stores for all using (is_admin()) with check (is_admin());
 
+-- STORE_LOCKS: everyone approved can see lock status; a user can lock
+-- (insert) only a store they're assigned to; only admins can unlock
+create policy "approved users read store locks" on store_locks for select using (is_approved());
+create policy "users lock their own assigned stores" on store_locks for insert with check (has_store_access(store_code));
+create policy "admins unlock any store" on store_locks for delete using (is_admin());
+
 -- ============================================================
--- 9. BOOTSTRAP YOUR FIRST ADMIN
+-- 10. BOOTSTRAP YOUR FIRST ADMIN
 -- Sign up once through the deployed app with your own email/password
 -- FIRST, then run the line below (with your real email) to promote
 -- yourself. Without this, no one can approve anyone — you must be
