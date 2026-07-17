@@ -52,7 +52,8 @@ async function handleAuthSubmit(){
     } else {
       const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if(error) throw error;
-      await onLoginSuccess();
+      if(!data || !data.user){ throw new Error('Sign-in succeeded but no user was returned — please try again.'); }
+      await onLoginSuccess(data.user);
     }
   }catch(e){
     setAuthMessage(errMsg(e), true);
@@ -68,60 +69,78 @@ async function handleSignOut(){
   document.getElementById('authScreen').style.display = 'flex';
   document.getElementById('authEmail').value = '';
   document.getElementById('authPassword').value = '';
+  setAuthMessage('', false);
 }
 
 async function checkApprovalAgain(){
   await onLoginSuccess();
 }
 
-async function onLoginSuccess(){
-  const { data: { user } } = await sb.auth.getUser();
-  if(!user){ return; }
+async function onLoginSuccess(knownUser){
+  let user = knownUser;
+  if(!user){
+    const { data, error: getUserErr } = await sb.auth.getUser();
+    user = data ? data.user : null;
+    if(getUserErr || !user){
+      setAuthMessage('Could not confirm your session — please sign in again.', true);
+      document.getElementById('loadingScreen') && (document.getElementById('loadingScreen').style.display = 'none');
+      document.getElementById('authScreen').style.display = 'flex';
+      return;
+    }
+  }
   currentUser = { id: user.id, email: user.email };
 
-  const { data: profile, error } = await sb.from('profiles').select('*').eq('id', user.id).single();
-  if(error || !profile){
-    // No profile — either a brand-new signup (trigger race) or someone
-    // who previously deleted their own account and is signing back in.
-    // Recreate a fresh pending profile so they show up for admin approval.
-    const { data: recreated, error: recreateErr } = await sb.from('profiles')
-      .insert({ id: user.id, email: user.email }).select().single();
-    if(recreateErr || !recreated){
+  try{
+    const { data: profile, error } = await sb.from('profiles').select('*').eq('id', user.id).single();
+    if(error || !profile){
+      // No profile — either a brand-new signup (trigger race) or someone
+      // who previously deleted their own account and is signing back in.
+      // Recreate a fresh pending profile so they show up for admin approval.
+      const { data: recreated, error: recreateErr } = await sb.from('profiles')
+        .insert({ id: user.id, email: user.email }).select().single();
+      if(recreateErr || !recreated){
+        document.getElementById('authScreen').style.display = 'none';
+        document.getElementById('pendingScreen').style.display = 'flex';
+        document.getElementById('pendingEmail').textContent = user.email;
+        return;
+      }
       document.getElementById('authScreen').style.display = 'none';
       document.getElementById('pendingScreen').style.display = 'flex';
       document.getElementById('pendingEmail').textContent = user.email;
       return;
     }
+    currentProfile = profile;
+
+    if(!profile.approved){
+      document.getElementById('authScreen').style.display = 'none';
+      document.getElementById('pendingScreen').style.display = 'flex';
+      document.getElementById('pendingEmail').textContent = user.email;
+      return;
+    }
+
+    // Approved — load into the app
     document.getElementById('authScreen').style.display = 'none';
-    document.getElementById('pendingScreen').style.display = 'flex';
-    document.getElementById('pendingEmail').textContent = user.email;
-    return;
+    document.getElementById('pendingScreen').style.display = 'none';
+    document.getElementById('appRoot').style.display = 'block';
+    document.body.className = profile.role === 'admin' ? 'role-admin' : 'role-user';
+    document.getElementById('whoAmI').textContent = `${user.email} · ${profile.role}`;
+
+    if(profile.role !== 'admin'){
+      const { data: assigned } = await sb.from('user_stores').select('store_code').eq('user_id', user.id);
+      myAssignedStores = (assigned || []).map(r => r.store_code);
+      showStep('scan');
+    } else {
+      myAssignedStores = [];
+    }
+
+    if(profile.role === 'admin') renderAdminPanel();
+  }catch(e){
+    console.error(e);
+    document.getElementById('appRoot').style.display = 'none';
+    document.getElementById('pendingScreen').style.display = 'none';
+    document.getElementById('authScreen').style.display = 'flex';
+    setAuthMessage('Something went wrong loading your account: ' + errMsg(e) + ' — please try signing in again.', true);
   }
-  currentProfile = profile;
-
-  if(!profile.approved){
-    document.getElementById('authScreen').style.display = 'none';
-    document.getElementById('pendingScreen').style.display = 'flex';
-    document.getElementById('pendingEmail').textContent = user.email;
-    return;
-  }
-
-  // Approved — load into the app
-  document.getElementById('authScreen').style.display = 'none';
-  document.getElementById('pendingScreen').style.display = 'none';
-  document.getElementById('appRoot').style.display = 'block';
-  document.body.className = profile.role === 'admin' ? 'role-admin' : 'role-user';
-  document.getElementById('whoAmI').textContent = `${user.email} · ${profile.role}`;
-
-  if(profile.role !== 'admin'){
-    const { data: assigned } = await sb.from('user_stores').select('store_code').eq('user_id', user.id);
-    myAssignedStores = (assigned || []).map(r => r.store_code);
-    showStep('scan');
-  } else {
-    myAssignedStores = [];
-  }
-
-  if(profile.role === 'admin') renderAdminPanel();
 }
 
 // ---------------- ADMIN PANEL ----------------
@@ -286,6 +305,15 @@ function normalizeSerial(s){
   let v = String(s).trim();
   if(/^\d+$/.test(v)) v = v.replace(/^0+(?=\d)/, ''); // strip leading zeros on purely-numeric serials only
   return v;
+}
+function normalizeStoreCode(s){
+  // Source system exports inconsistent casing for the same store
+  // (e.g. "SFXVadodara" vs "SFXVADODARA" even within one file).
+  // Uppercase is the canonical form throughout this app.
+  return s ? String(s).trim().toUpperCase() : '';
+}
+function findStore(row){
+  return normalizeStoreCode(findVal(row, STORE_ALIASES));
 }
 function findSerial(row){
   const s = findVal(row, SERIAL_ALIASES);
@@ -477,7 +505,7 @@ function handleBaseUpload(event){
   if(!requireCycle()){ event.target.value=''; return; }
   parseWorkbook(file, async (rows) => {
     const parsed = rows.map(r => ({
-      store: findVal(r, STORE_ALIASES),
+      store: findStore(r),
       sku: findVal(r, SKU_ALIASES),
       desc: findVal(r, DESC_ALIASES),
       serial: findSerial(r)
@@ -513,7 +541,7 @@ function handleScanUpload(event){
   parseWorkbook(file, async (rows) => {
     const parsed = [];
     rows.forEach(r => {
-      const storeFromFile = findVal(r, STORE_ALIASES);
+      const storeFromFile = findStore(r);
       const serial = findSerial(r);
       const sku = findVal(r, SKU_ALIASES);
       if(!serial) return;
@@ -543,14 +571,14 @@ async function loadSampleBaseData(){
     {store:'SFXCUTTACK', sku:'STB-HD200', desc:'Set-top box HD', serial:'SN-1002841'},
     {store:'SFXCUTTACK', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1002855'},
     {store:'SFXCUTTACK', sku:'RTR-AX5', desc:'Wireless router', serial:'SN-1002860'},
-    {store:'SFXKanpur', sku:'STB-HD200', desc:'Set-top box HD', serial:'SN-1002901'},
-    {store:'SFXKanpur', sku:'RTR-AX5', desc:'Wireless router', serial:'SN-1003002'},
-    {store:'SFXKanpur', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1003010'},
+    {store:'SFXKANPUR', sku:'STB-HD200', desc:'Set-top box HD', serial:'SN-1002901'},
+    {store:'SFXKANPUR', sku:'RTR-AX5', desc:'Wireless router', serial:'SN-1003002'},
+    {store:'SFXKANPUR', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1003010'},
     {store:'SFXMORADABAD', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1003140'},
     {store:'SFXMORADABAD', sku:'STB-HD200', desc:'Set-top box HD', serial:'SN-1003155'},
-    {store:'SFXGurgaon', sku:'RTR-AX5', desc:'Wireless router', serial:'SN-1003210'},
-    {store:'SFXGurgaon', sku:'STB-HD200', desc:'Set-top box HD', serial:'SN-1003225'},
-    {store:'SFXVadodara', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1003310'}
+    {store:'SFXGURGAON', sku:'RTR-AX5', desc:'Wireless router', serial:'SN-1003210'},
+    {store:'SFXGURGAON', sku:'STB-HD200', desc:'Set-top box HD', serial:'SN-1003225'},
+    {store:'SFXVADODARA', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1003310'}
   ];
   try{
     const payload = sample.map(r => ({cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial}));

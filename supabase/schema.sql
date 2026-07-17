@@ -14,15 +14,15 @@ create table if not exists stores (
 );
 
 insert into stores (store_code, circle) values
-  ('SFXCUTTACK','ORS'),('SFXKanpur','UPE'),('SFXMORADABAD','UPW'),('SFXAligarh','UPW'),
-  ('SFXAzamgarh','UPE'),('SFXNizamabad','APTG'),('SFXNalgonda','APTG'),('SFXAllahabad','UPE'),
-  ('SFXColonejganj','UPE'),('SFXSambhal','UPW'),('SFXKOTA','RAJ'),('SFXGhaziabad','UPW'),
-  ('SFXSaharanpur','UPW'),('SFXGulbarga','KK'),('SFXAmalapuram','APTG'),('SFXFaridabad','HAR'),
-  ('SFXGurgaon','HAR'),('SFXPanipat','HAR'),('SFXVadodara','GUJ'),('SFXIndore','MPCG'),
-  ('SFXGwalior','MPCG'),('SFXPurnia','BHJ'),('SFXPatna','BHJ'),('SFXBegusarai','BHJ'),
-  ('SFXSuryapet','APTG'),('SFXNirmal','APTG'),('SFXJhajjar','HAR'),('SFXHooghly','WB'),
-  ('SFXRasulugarh','ORS'),('SFXJhansi','UPE'),('SFXBulandshahr','UPW'),('SFXBarabanki','UPE'),
-  ('SFXMadhubani','BHJ'),('SFXDholi','BHJ'),('SFXMidnapore','WB'),('SFXFatepur','WB')
+  ('SFXCUTTACK','ORS'),('SFXKANPUR','UPE'),('SFXMORADABAD','UPW'),('SFXALIGARH','UPW'),
+  ('SFXAZAMGARH','UPE'),('SFXNIZAMABAD','APTG'),('SFXNALGONDA','APTG'),('SFXALLAHABAD','UPE'),
+  ('SFXCOLONEJGANJ','UPE'),('SFXSAMBHAL','UPW'),('SFXKOTA','RAJ'),('SFXGHAZIABAD','UPW'),
+  ('SFXSAHARANPUR','UPW'),('SFXGULBARGA','KK'),('SFXAMALAPURAM','APTG'),('SFXFARIDABAD','HAR'),
+  ('SFXGURGAON','HAR'),('SFXPANIPAT','HAR'),('SFXVADODARA','GUJ'),('SFXINDORE','MPCG'),
+  ('SFXGWALIOR','MPCG'),('SFXPURNIA','BHJ'),('SFXPATNA','BHJ'),('SFXBEGUSARAI','BHJ'),
+  ('SFXSURYAPET','APTG'),('SFXNIRMAL','APTG'),('SFXJHAJJAR','HAR'),('SFXHOOGHLY','WB'),
+  ('SFXRASULUGARH','ORS'),('SFXJHANSI','UPE'),('SFXBULANDSHAHR','UPW'),('SFXBARABANKI','UPE'),
+  ('SFXMADHUBANI','BHJ'),('SFXDHOLI','BHJ'),('SFXMIDNAPORE','WB'),('SFXFATEPUR','WB')
 on conflict (store_code) do update set circle = excluded.circle;
 
 -- ------------------------------------------------------------
@@ -42,9 +42,7 @@ create table if not exists audit_cycles (
 create table if not exists base_serials (
   id uuid primary key default gen_random_uuid(),
   cycle_id uuid references audit_cycles(id) on delete cascade,
-  store_code text references stores(store_code),
-  sku text,
-  description text,
+  store_code text references stores(store_code) on update cascade,
   serial_no text not null,
   uploaded_at timestamptz default now()
 );
@@ -59,7 +57,7 @@ create index if not exists idx_base_serials_serial on base_serials(serial_no);
 create table if not exists scans (
   id uuid primary key default gen_random_uuid(),
   cycle_id uuid references audit_cycles(id) on delete cascade,
-  store_code text references stores(store_code),
+  store_code text references stores(store_code) on update cascade,
   sku text,
   serial_no text not null,
   scanned_by uuid references auth.users(id) on delete set null,
@@ -103,7 +101,7 @@ create trigger on_auth_user_created
 -- ------------------------------------------------------------
 create table if not exists user_stores (
   user_id uuid references profiles(id) on delete cascade,
-  store_code text references stores(store_code) on delete cascade,
+  store_code text references stores(store_code) on delete cascade on update cascade,
   primary key (user_id, store_code)
 );
 

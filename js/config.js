@@ -7,13 +7,13 @@ if(window.supabase && typeof window.supabase.createClient === 'function'){
   console.error('Supabase client library failed to load from CDN — check network/ad-blocker and reload.');
 }
 const STORE_MASTER = {
-  'SFXCUTTACK':'ORS','SFXKanpur':'UPE','SFXMORADABAD':'UPW','SFXAligarh':'UPW','SFXAzamgarh':'UPE',
-  'SFXNizamabad':'APTG','SFXNalgonda':'APTG','SFXAllahabad':'UPE','SFXColonejganj':'UPE','SFXSambhal':'UPW',
-  'SFXKOTA':'RAJ','SFXGhaziabad':'UPW','SFXSaharanpur':'UPW','SFXGulbarga':'KK','SFXAmalapuram':'APTG',
-  'SFXFaridabad':'HAR','SFXGurgaon':'HAR','SFXPanipat':'HAR','SFXVadodara':'GUJ','SFXIndore':'MPCG',
-  'SFXGwalior':'MPCG','SFXPurnia':'BHJ','SFXPatna':'BHJ','SFXBegusarai':'BHJ','SFXSuryapet':'APTG',
-  'SFXNirmal':'APTG','SFXJhajjar':'HAR','SFXHooghly':'WB','SFXRasulugarh':'ORS','SFXJhansi':'UPE',
-  'SFXBulandshahr':'UPW','SFXBarabanki':'UPE','SFXMadhubani':'BHJ','SFXDholi':'BHJ','SFXMidnapore':'WB',
-  'SFXFatepur':'WB'
+  'SFXCUTTACK':'ORS','SFXKANPUR':'UPE','SFXMORADABAD':'UPW','SFXALIGARH':'UPW','SFXAZAMGARH':'UPE',
+  'SFXNIZAMABAD':'APTG','SFXNALGONDA':'APTG','SFXALLAHABAD':'UPE','SFXCOLONEJGANJ':'UPE','SFXSAMBHAL':'UPW',
+  'SFXKOTA':'RAJ','SFXGHAZIABAD':'UPW','SFXSAHARANPUR':'UPW','SFXGULBARGA':'KK','SFXAMALAPURAM':'APTG',
+  'SFXFARIDABAD':'HAR','SFXGURGAON':'HAR','SFXPANIPAT':'HAR','SFXVADODARA':'GUJ','SFXINDORE':'MPCG',
+  'SFXGWALIOR':'MPCG','SFXPURNIA':'BHJ','SFXPATNA':'BHJ','SFXBEGUSARAI':'BHJ','SFXSURYAPET':'APTG',
+  'SFXNIRMAL':'APTG','SFXJHAJJAR':'HAR','SFXHOOGHLY':'WB','SFXRASULUGARH':'ORS','SFXJHANSI':'UPE',
+  'SFXBULANDSHAHR':'UPW','SFXBARABANKI':'UPE','SFXMADHUBANI':'BHJ','SFXDHOLI':'BHJ','SFXMIDNAPORE':'WB',
+  'SFXFATEPUR':'WB'
 };
-function circleFor(store){ return STORE_MASTER[store] || '—'; }
+function circleFor(store){ return STORE_MASTER[String(store).toUpperCase()] || '—'; }
