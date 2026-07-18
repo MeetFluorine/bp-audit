@@ -12,6 +12,7 @@ css/style.css        — all styling
 js/config.js         — Supabase project URL/key + store master list (edit this per deployment)
 js/app.js            — all application logic
 supabase/schema.sql   — full database schema + security policies (run once per Supabase project)
+supabase/add_profile_fields.sql — patch for existing projects: adds name/photo fields + the avatars storage bucket (already folded into schema.sql for new projects)
 .gitignore
 README.md
 ```
@@ -42,6 +43,13 @@ New sign-ups are **not** usable until an admin approves them from the Admin tab 
 5. Any time you edit `js/config.js`, `js/app.js`, or `css/style.css` and push, GitHub Pages redeploys automatically.
 
 (Netlify or Vercel work identically — just point them at this same folder; no build step is needed since this is a plain static site.)
+
+## Updating an existing project (profile name/photo + forgot password)
+
+If your Supabase project was set up before this change, run two things once:
+
+1. **SQL Editor → New query** — paste and run `supabase/add_profile_fields.sql`. (Brand-new projects don't need this — it's already included in `schema.sql`.)
+2. **Authentication → URL Configuration** — add your deployed site's URL (e.g. `https://yourusername.github.io/reponame/`) to **Redirect URLs**. Without this, the "Forgot password?" email link won't be allowed to bring people back to the app.
 
 ## Bootstrapping your first admin
 

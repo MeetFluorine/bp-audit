@@ -73,19 +73,23 @@ create index if not exists idx_scans_serial on scans(serial_no);
 create table if not exists profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text,
+  full_name text,
+  avatar_url text,
   role text not null default 'user' check (role in ('admin','user')),
   approved boolean not null default false,
   created_at timestamptz default now()
 );
 
+-- Captures the name typed on the sign-up form (passed as auth metadata)
+-- into the new profile row automatically.
 create or replace function handle_new_user()
 returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email)
-  values (new.id, new.email)
+  insert into public.profiles (id, email, full_name)
+  values (new.id, new.email, new.raw_user_meta_data->>'full_name')
   on conflict (id) do nothing;
   return new;
 end;
@@ -206,12 +210,54 @@ create policy "delete own scans" on scans for delete
 
 -- PROFILES: everyone reads their own; admins read/update/delete all;
 -- anyone can (re)create their own profile row (covers re-signup after
--- deleting an account — see README for why this matters)
+-- deleting an account — see README for why this matters); a user may
+-- also update their OWN row (needed for the Profile page's name/photo
+-- editing) — a trigger below stops that same access from being used
+-- to self-approve or self-promote to admin.
 create policy "read own profile" on profiles for select using (id = auth.uid() or is_admin());
 create policy "admins manage profiles" on profiles for update using (is_admin());
+create policy "users update own profile" on profiles for update using (id = auth.uid()) with check (id = auth.uid());
 create policy "admins delete any profile" on profiles for delete using (is_admin());
 create policy "users delete own profile" on profiles for delete using (id = auth.uid());
 create policy "users can create own profile" on profiles for insert with check (id = auth.uid());
+
+create or replace function prevent_profile_privilege_escalation()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if not is_admin() then
+    if new.role is distinct from old.role
+       or new.approved is distinct from old.approved
+       or new.email is distinct from old.email then
+      raise exception 'Not permitted to change role, approval status, or email here';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_profile_privilege on profiles;
+create trigger guard_profile_privilege
+  before update on profiles
+  for each row execute function prevent_profile_privilege_escalation();
+
+-- AVATARS: a public-read storage bucket; each user may only write inside
+-- a folder named after their own user id, e.g. avatars/<user-id>/avatar.jpg
+insert into storage.buckets (id, name, public)
+values ('avatars','avatars', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "avatar public read" on storage.objects;
+create policy "avatar public read" on storage.objects for select
+  using (bucket_id = 'avatars');
+drop policy if exists "users upload own avatar" on storage.objects;
+create policy "users upload own avatar" on storage.objects for insert
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "users update own avatar" on storage.objects;
+create policy "users update own avatar" on storage.objects for update
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "users delete own avatar" on storage.objects;
+create policy "users delete own avatar" on storage.objects for delete
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- USER_STORES: users see their own assignments; admins manage all
 create policy "read own store assignments" on user_stores for select using (user_id = auth.uid() or is_admin());

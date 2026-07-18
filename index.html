@@ -3,10 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BharatPe Audit Tracker — Store Serial Audit</title>
+<title>Shadowfax Audit Tracker — Store Serial Audit</title>
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/favicon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/favicon-180.png">
+<link rel="shortcut icon" href="assets/favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -15,22 +20,32 @@
 <!-- LOADING SCREEN — shown until we know whether there's an active session -->
 <div id="loadingScreen" class="auth-wrap">
   <div class="auth-card" style="text-align:center;">
-    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
-    <h1 class="brand-title" style="margin-bottom:10px;font-size:24px;">BharatPe Audit Tracker</h1>
-    <p class="hint" style="margin:0;">Loading…</p>
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <div class="auth-header">
+      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+      <p class="brand-eyebrow">Serialized inventory · physical verification</p>
+    </div>
+    <p class="hint" style="margin:0;color:var(--text-faint);">Loading…</p>
   </div>
 </div>
 
 <div id="authScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
-    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
-    <h1 class="brand-title" style="margin-bottom:22px;font-size:24px;">BharatPe Audit Tracker</h1>
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <div class="auth-header">
+      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+      <p class="brand-eyebrow" style="margin-bottom:22px;">Serialized inventory · physical verification</p>
+    </div>
     <div id="authTabs" class="auth-tabs">
       <button class="auth-tab active" id="authTabSignin" onclick="switchAuthMode('signin')">Sign in</button>
       <button class="auth-tab" id="authTabSignup" onclick="switchAuthMode('signup')">Sign up</button>
     </div>
+    <div class="auth-back-row" id="authBackRow" style="display:none;">
+      <button type="button" class="link-btn" onclick="switchAuthMode('signin')">← Back to sign in</button>
+    </div>
+    <div class="form-field" id="authFullNameField" style="margin-bottom:12px;display:none;"><label>Full name</label><input id="authFullName" type="text" style="width:100%;" placeholder="e.g. Chandan Kumar"></div>
     <div class="form-field" style="margin-bottom:12px;"><label>Email</label><input id="authEmail" type="email" style="width:100%;" placeholder="you@company.com"></div>
-    <div class="form-field" style="margin-bottom:16px;"><label>Password</label>
+    <div class="form-field" id="authPasswordField" style="margin-bottom:16px;"><label>Password</label>
       <div class="password-wrap">
         <input id="authPassword" type="password" style="width:100%;" placeholder="••••••••">
         <button type="button" class="password-toggle" onclick="togglePasswordVisibility('authPassword', this)" aria-label="Show password" title="Show password">
@@ -39,17 +54,38 @@
         </button>
       </div>
     </div>
+    <div class="auth-forgot-row" id="authForgotRow">
+      <button type="button" class="link-btn" onclick="switchAuthMode('forgot')">Forgot password?</button>
+    </div>
     <button class="btn btn-primary" style="width:100%;" id="authSubmitBtn" onclick="handleAuthSubmit()">Sign in</button>
     <p id="authMessage" class="auth-message"></p>
+  </div>
+</div>
+
+<!-- RESET PASSWORD SCREEN — shown after clicking the emailed reset link -->
+<div id="resetPasswordScreen" class="auth-wrap" style="display:none;">
+  <div class="auth-card">
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <div class="auth-header">
+      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+      <p class="brand-eyebrow" style="margin-bottom:22px;">Set a new password</p>
+    </div>
+    <div class="form-field" style="margin-bottom:12px;"><label>New password</label><input id="resetNewPassword" type="password" style="width:100%;" placeholder="At least 6 characters"></div>
+    <div class="form-field" style="margin-bottom:16px;"><label>Confirm new password</label><input id="resetConfirmPassword" type="password" style="width:100%;" placeholder="Repeat it"></div>
+    <button class="btn btn-primary" style="width:100%;" onclick="handleResetPasswordSubmit()">Update password</button>
+    <p id="resetPasswordMessage" class="auth-message"></p>
   </div>
 </div>
 
 <!-- PENDING APPROVAL SCREEN -->
 <div id="pendingScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
-    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
-    <h1 class="brand-title" style="margin-bottom:16px;font-size:24px;">BharatPe Audit Tracker</h1>
-    <p class="hint" style="margin-bottom:20px;">Your account (<span id="pendingEmail" style="color:var(--text);"></span>) is created but hasn't been approved yet. Ask your admin to approve your access and assign you to a store — this page will unlock once that's done.</p>
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <div class="auth-header">
+      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+      <p class="brand-eyebrow" style="margin-bottom:16px;">Serialized inventory · physical verification</p>
+    </div>
+    <p class="hint" style="margin-bottom:20px;color:var(--text-faint);">Your account (<span id="pendingEmail" style="color:var(--text);"></span>) is created but hasn't been approved yet. Ask your admin to approve your access and assign you to a store — this page will unlock once that's done.</p>
     <div class="btn-row"><button class="btn" onclick="checkApprovalAgain()">Check again</button><button class="btn btn-danger" onclick="handleSignOut()">Sign out</button></div>
   </div>
 </div>
@@ -59,80 +95,156 @@
 
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <p class="brand-eyebrow">Serialized inventory · physical verification</p>
-      <h1 class="brand-title">BharatPe Audit Tracker</h1>
+      <div class="brand-mark">
+        <img src="assets/shadowfax-mark-96.png" alt="Shadowfax">
+      </div>
+      <div class="brand-textblock">
+        <h1 class="brand-title">Shadowfax</h1>
+        <p class="brand-eyebrow">Audit Tracker</p>
+      </div>
     </div>
 
-    <nav class="sidebar-nav">
-      <div class="nav-item active admin-only" id="tab-setup" onclick="showStep('setup')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+    <div class="sidebar-nav-wrap">
+      <button class="sidebar-hamburger" id="sidebarHamburger" onclick="toggleSidebarNav()">
+        <span class="sidebar-hamburger-lines"><span></span><span></span><span></span></span>
+        <span class="sidebar-hamburger-label" id="sidebarCurrentPageLabel">Overview</span>
+        <svg class="sidebar-hamburger-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+
+      <nav class="sidebar-nav" id="sidebarNav">
+      <div class="nav-item active admin-only" id="tab-dashboard" onclick="showStep('dashboard')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg></span>
         <span class="nav-text">
-          <span class="nav-label">Setup base data</span>
-          <span class="nav-sub" id="setupSub">Upload the system/expected serial list</span>
+          <span class="nav-label">Overview</span>
         </span>
       </div>
+
+      <p class="nav-group-label">Operations</p>
       <div class="nav-item" id="tab-scan" onclick="showStep('scan')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
         <span class="nav-text">
-          <span class="nav-label">Scan / upload physical count</span>
+          <span class="nav-label">Scan / Upload</span>
           <span class="nav-sub" id="scanSub">Go store by store</span>
         </span>
       </div>
-      <div class="nav-item admin-only" id="tab-dashboard" onclick="showStep('dashboard')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></svg></span>
+      <div class="nav-item admin-only" id="tab-setup" onclick="showStep('setup')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
         <span class="nav-text">
-          <span class="nav-label">Dashboard & export</span>
-          <span class="nav-sub" id="dashSub">Reconcile and download</span>
+          <span class="nav-label">Setup Base Data</span>
+          <span class="nav-sub" id="setupSub">Upload the system/expected list</span>
         </span>
       </div>
+
+      <p class="nav-group-label admin-only">Management</p>
       <div class="nav-item admin-only" id="tab-admin" onclick="showStep('admin')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 1 1 3.6 2.94"/><path d="M15 20a5 5 0 0 1 5.5-4.97"/></svg></span>
         <span class="nav-text">
-          <span class="nav-label">Users & stores</span>
+          <span class="nav-label">Users & Stores</span>
           <span class="nav-sub">Approve auditors, assign stores</span>
         </span>
       </div>
+
+      <p class="nav-group-label">Settings</p>
       <div class="nav-item" id="tab-profile" onclick="showStep('profile')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span>
         <span class="nav-text">
-          <span class="nav-label">My account</span>
-          <span class="nav-sub">Password, assigned stores, delete account</span>
+          <span class="nav-label">My Account</span>
         </span>
       </div>
-    </nav>
+      </nav>
+      <div class="nav-backdrop" id="navBackdrop" onclick="closeSidebarNav()"></div>
+    </div>
+
+    <div class="sidebar-cyclebox" id="sidebarCyclebox">
+      <p class="sidebar-cyclebox-label">Audit cycle</p>
+      <input id="cycleName" placeholder="PV-2026-Q3">
+      <div class="btn-row">
+        <button class="btn" onclick="handleLoadCycle()">Load</button>
+        <button class="btn btn-primary admin-only" onclick="handleCreateCycle()">+ New</button>
+      </div>
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="btn btn-danger admin-only" style="flex:1;" onclick="handleDeleteCycle()" title="Permanently deletes the connected cycle and all its base data + scans">Delete cycle</button>
+      </div>
+      <p class="sidebar-progressbox-sub" id="saveIndicator" style="margin-top:8px;"></p>
+    </div>
+
+    <div class="sidebar-progressbox" id="sidebarProgressbox">
+      <div class="sidebar-progressbox-top">
+        <span class="sidebar-progressbox-label">Audit progress</span>
+        <span class="sidebar-progressbox-pct" id="sidebarProgressPct">0%</span>
+      </div>
+      <div class="sidebar-progress-track"><div class="sidebar-progress-fill" id="sidebarProgressFill" style="width:0%;"></div></div>
+      <p class="sidebar-progressbox-sub" id="sidebarProgressSub">0 / 0 stores completed</p>
+    </div>
 
     <div class="sidebar-footer">
+      <div class="sidebar-avatar" id="sidebarAvatar">–</div>
       <div class="sidebar-user">
         <span class="sidebar-user-email" id="whoAmI"></span>
-        <span class="sidebar-user-role" id="saveIndicator"></span>
       </div>
-      <button class="btn" onclick="handleSignOut()">Sign out</button>
+      <button class="sidebar-signout" onclick="handleSignOut()" title="Sign out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      </button>
     </div>
   </aside>
 
   <main class="main-content">
-    <div class="content-topbar">
-      <h2 class="content-title">Audit workspace</h2>
+
+    <div class="topbar">
+      <button class="topbar-iconbtn" id="topbarBackBtn" onclick="handleBackNav()" title="Go back" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <div class="topbar-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="topbarSearch" placeholder="Search stores, SKUs, serials…" oninput="handleTopbarSearch(this.value)">
+      </div>
+      <div class="topbar-spacer"></div>
+      <div class="topbar-right">
+        <div class="topbar-cycle admin-only">
+          <span>Audit Cycle</span>
+          <b id="topbarCycleName">Not connected</b>
+        </div>
+        <button class="topbar-iconbtn" onclick="toggleTheme()" title="Toggle light / dark theme" id="themeToggleBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="themeIconSun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="themeIconMoon" style="display:none;"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+        </button>
+        <button class="topbar-iconbtn admin-only" title="Stores still pending audit" onclick="showStep('dashboard')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+          <span class="topbar-badge" id="topbarBellBadge" style="display:none;">0</span>
+        </button>
+        <div class="topbar-avatar" onclick="showStep('profile')" title="My account">
+          <div class="topbar-avatar-circle" id="topbarAvatar">–</div>
+          <div class="topbar-avatar-text">
+            <span class="topbar-avatar-name" id="topbarAvatarName">–</span>
+            <span class="topbar-avatar-role" id="topbarAvatarRole">–</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="content-topbar admin-only" id="cycleControlBar">
+      <h2 class="content-title" id="contentTitle">Overview</h2>
       <div class="cycle-input">
-        <label>Audit cycle name</label>
-        <input id="cycleName" placeholder="PV-2026-Q3" style="width:160px;">
-        <button class="btn" onclick="handleLoadCycle()">Load existing</button>
-        <button class="btn btn-primary admin-only" onclick="handleCreateCycle()">+ New cycle</button>
-        <button class="btn btn-danger admin-only" onclick="handleDeleteCycle()" title="Permanently deletes the connected cycle and all its base data + scans">Delete cycle</button>
+        <label>Currently connected cycle:</label>
+        <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--text);" id="cycleControlName">—</span>
       </div>
     </div>
 
   <div class="wrap">
 
-  <div id="globalMessage" style="display:none;position:fixed;top:18px;left:50%;transform:translateX(-50%);background:var(--panel-2);border:1px solid var(--steel);border-radius:12px;padding:12px 20px;font-size:12.5px;box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:9999;max-width:min(680px,90vw);text-align:center;"></div>
+  <div id="globalMessage" style="display:none;position:fixed;top:18px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px 20px;font-size:12.5px;box-shadow:var(--shadow-lg);z-index:9999;max-width:min(680px,90vw);text-align:center;color:var(--text);"></div>
 
   <!-- STEP 1: SETUP -->
-  <div class="panel-view active" id="view-setup">
+  <div class="panel-view" id="view-setup">
     <div class="card">
       <h4>Upload base / system data</h4>
       <p class="hint">Upload your base file as-is — it auto-detects <code>LocationCode</code> as store, <code>ItemNo</code> as SKU, and <code>SerialNo</code> (falling back to <code>IMEI</code> if blank) as the serial to reconcile against. Extra columns like Description, MRP, LotNo etc. are ignored. This is locked in as the "expected" list before scanning starts.</p>
-      <div class="upload-zone">
-        <input type="file" id="baseFileInput" accept=".xlsx,.xls,.csv" onchange="handleBaseUpload(event)">
+      <div class="upload-zone" id="baseUploadZone">
+        <label class="upload-zone-trigger" for="baseFileInput">
+          <span class="upload-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+          <span class="upload-zone-text"><b>Click to upload</b> or drag and drop<span class="upload-zone-hint">XLSX, XLS or CSV</span></span>
+        </label>
+        <input type="file" id="baseFileInput" accept=".xlsx,.xls,.csv" onchange="handleBaseUpload(event)" style="display:none;">
         <div class="upload-status" id="baseUploadStatus"></div>
       </div>
       <div class="btn-row">
@@ -158,7 +270,15 @@
       <p class="hint">Pick the store you're currently auditing. Scan serials with a barcode scanner (it types + presses Enter automatically) or type them manually, or upload an Excel of pre-scanned serials for this store. Note: if your uploaded file already has its own store/location column, that value is used instead of the dropdown — so a multi-store file will correctly split across stores, but a single-store file with a leftover store column from another export could get misattributed. Leave that column out if you want everything in the file counted under the selected store.</p>
       <div class="scan-store-select">
         <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Store</label><select id="scanStoreSelect" style="width:100%;" onchange="renderScanView()"></select></div>
-        <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Upload scanned Excel for this store</label><input type="file" id="scanFileInput" accept=".xlsx,.xls,.csv" onchange="handleScanUpload(event)" style="width:100%;"></div>
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Upload scanned Excel for this store</label>
+          <div class="upload-zone-compact" id="scanUploadZone">
+            <label class="upload-zone-trigger" for="scanFileInput">
+              <span class="upload-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+              <span class="upload-zone-text"><b>Click to upload</b> or drag &amp; drop<span class="upload-zone-hint">XLSX, XLS or CSV</span></span>
+            </label>
+            <input type="file" id="scanFileInput" accept=".xlsx,.xls,.csv" onchange="handleScanUpload(event)" style="display:none;">
+          </div>
+        </div>
       </div>
       <div id="lockBanner"></div>
       <div class="scan-progress" id="scanProgress"></div>
@@ -181,43 +301,92 @@
     </div>
   </div>
 
-  <!-- STEP 3: DASHBOARD -->
-  <div class="panel-view" id="view-dashboard">
-    <div class="status-strip" id="auditStatusStrip" style="justify-content:flex-start;gap:14px;">
-      <span id="auditStatusText" style="flex:1;">Audit not yet completed. Go to step 2 and click "Complete audit" when scanning is finished.</span>
-      <button class="btn" onclick="manualRefreshDashboard()" title="Fetch the latest scans right now">↻ Refresh now</button>
+  <!-- STEP 3: DASHBOARD / OVERVIEW -->
+  <div class="panel-view active" id="view-dashboard">
+
+    <div class="greet-row">
+      <div>
+        <h2 class="greet-title" id="greetTitle">Good morning 👋</h2>
+        <p class="greet-sub" id="greetSub">Here's what's happening with your audit cycle.</p>
+      </div>
+      <div class="btn-row">
+        <button class="btn" onclick="manualRefreshDashboard()" title="Fetch the latest scans right now">↻ Refresh now</button>
+        <button class="btn btn-primary admin-only" onclick="showStep('setup')">+ Start New Audit</button>
+      </div>
     </div>
 
+    <div id="dashboardScopeChip"></div>
     <div class="kpi-strip" id="kpiStrip"></div>
 
-    <h3 class="section-title">Store results</h3>
+    <div class="widget-row">
+      <div class="widget-card">
+        <p class="widget-card-title">Quick Actions</p>
+        <div class="qa-grid">
+          <button class="qa-btn" onclick="showStep('scan')">
+            <span class="qa-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
+            <span class="qa-label">Scan / Upload<br>Physical Count</span>
+          </button>
+          <button class="qa-btn admin-only" onclick="showStep('setup')">
+            <span class="qa-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+            <span class="qa-label">Upload<br>Base Data</span>
+          </button>
+          <button class="qa-btn" onclick="downloadExcel()">
+            <span class="qa-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>
+            <span class="qa-label">Download<br>Excel Report</span>
+          </button>
+          <button class="qa-btn" onclick="setDashboardStoreFilter(null);document.getElementById('storeGridSection').scrollIntoView({behavior:'smooth'});">
+            <span class="qa-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>
+            <span class="qa-label">View All<br>Stores</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="widget-card">
+        <p class="widget-card-title">Audit Health</p>
+        <div class="health-donut-wrap">
+          <div class="health-donut-canvas-box">
+            <canvas id="varianceChart" role="img" aria-label="Doughnut chart of variance records grouped by match, short and excess"></canvas>
+            <div class="health-center">
+              <div class="health-center-pct" id="healthCenterPct">0%</div>
+              <div class="health-center-label">Overall Health</div>
+            </div>
+          </div>
+          <div class="health-legend" id="varLegend"></div>
+        </div>
+      </div>
+
+      <div class="widget-card">
+        <p class="widget-card-title">Live Activity</p>
+        <div class="activity-list" id="liveActivityList"></div>
+      </div>
+    </div>
+
+    <h3 class="section-title" id="storeGridSection">Store results</h3>
     <div class="tag-grid" id="storeGrid"></div>
 
-    <h3 class="section-title">Variance overview</h3>
+    <h3 class="section-title">Match vs. variance by store</h3>
     <div class="charts-row">
       <div class="chart-panel">
-        <h4>Match vs variance by store</h4>
         <div style="position:relative;height:260px;">
           <canvas id="storeChart" role="img" aria-label="Bar chart comparing matched versus variance serial counts per store"></canvas>
         </div>
       </div>
-      <div class="chart-panel">
-        <h4>Variance by type</h4>
-        <div style="position:relative;height:260px;">
-          <canvas id="varianceChart" role="img" aria-label="Doughnut chart of variance records grouped by match, short and excess"></canvas>
-        </div>
-        <div id="varLegend" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;font-size:11.5px;color:var(--text-dim);"></div>
-      </div>
     </div>
 
-    <h3 class="section-title">Full reconciliation detail</h3>
+    <h3 class="section-title">Recent Reconciliation Details</h3>
     <div class="detail-toolbar">
       <input id="detailSearch" placeholder="Search serial, SKU, or store…" oninput="renderDashboard()">
-      <span id="detailFilterBar" class="detail-filter-bar">Showing all stores — click a store card above to filter</span>
+      <div class="detail-toolbar-left">
+        <span id="detailFilterBar" class="detail-filter-bar">Showing all stores</span>
+        <select id="detailStoreFilterSelect" onchange="setDashboardStoreFilter(this.value||null)" title="Filter by store">
+          <option value="">Filters: all stores</option>
+        </select>
+        <button class="btn" onclick="downloadExcel()">⇩ Export</button>
+      </div>
     </div>
-    <div class="table-wrap" style="max-height:400px;">
+    <div class="table-wrap" style="max-height:420px;">
       <table>
-        <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Physical scan serial</th><th>System serial</th><th>Status</th></tr></thead>
+        <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Physical scan serial</th><th>System serial</th><th>Match rate</th><th>Status</th><th>Last scanned</th></tr></thead>
         <tbody id="detailTableBody"></tbody>
       </table>
     </div>
@@ -250,6 +419,30 @@
     <div class="card">
       <h4>Account</h4>
       <div id="profileInfo" style="font-family:var(--font-mono);font-size:12.5px;color:var(--text-dim);margin-bottom:8px;"></div>
+    </div>
+    <div class="card">
+      <h4>Edit profile</h4>
+      <p class="hint">This name is shown across the app instead of your email — set it up once and it'll appear on the dashboard, admin lists and everywhere else.</p>
+      <div class="profile-edit-row">
+        <div class="profile-avatar-preview" id="profileAvatarPreview">–</div>
+        <div>
+          <label class="btn" for="avatarFileInput" style="display:inline-flex;">Change photo</label>
+          <input type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="handleAvatarUpload(event)">
+          <p class="hint" style="margin:6px 0 0;">JPG, PNG or WEBP, up to 2MB.</p>
+        </div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr;max-width:360px;margin-top:16px;">
+        <div class="form-field"><label>Full name</label><input id="profileFullName" placeholder="e.g. Chandan Kumar"></div>
+      </div>
+      <button class="btn btn-primary" onclick="handleSaveProfileName()">Save name</button>
+    </div>
+    <div class="card">
+      <h4>Appearance</h4>
+      <p class="hint">Switch between light and dark mode. This is saved on this device.</p>
+      <div class="btn-row">
+        <button class="btn" onclick="setTheme('light')">☀ Light</button>
+        <button class="btn" onclick="setTheme('dark')">☾ Dark</button>
+      </div>
     </div>
     <div class="card">
       <h4>Change password</h4>
