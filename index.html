@@ -21,10 +21,8 @@
 <div id="loadingScreen" class="auth-wrap">
   <div class="auth-card" style="text-align:center;">
     <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
-    <div class="auth-header">
-      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
-      <p class="brand-eyebrow">Serialized inventory · physical verification</p>
-    </div>
+    <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+    <p class="brand-eyebrow">Serialized inventory · physical verification</p>
     <p class="hint" style="margin:0;color:var(--text-faint);">Loading…</p>
   </div>
 </div>
@@ -32,20 +30,15 @@
 <div id="authScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
     <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
-    <div class="auth-header">
-      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
-      <p class="brand-eyebrow" style="margin-bottom:22px;">Serialized inventory · physical verification</p>
-    </div>
+    <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+    <p class="brand-eyebrow" style="margin-bottom:22px;">Serialized inventory · physical verification</p>
     <div id="authTabs" class="auth-tabs">
       <button class="auth-tab active" id="authTabSignin" onclick="switchAuthMode('signin')">Sign in</button>
       <button class="auth-tab" id="authTabSignup" onclick="switchAuthMode('signup')">Sign up</button>
     </div>
-    <div class="auth-back-row" id="authBackRow" style="display:none;">
-      <button type="button" class="link-btn" onclick="switchAuthMode('signin')">← Back to sign in</button>
-    </div>
-    <div class="form-field" id="authFullNameField" style="margin-bottom:12px;display:none;"><label>Full name</label><input id="authFullName" type="text" style="width:100%;" placeholder="e.g. Chandan Kumar"></div>
+    <div class="form-field" id="authNameField" style="margin-bottom:12px;display:none;"><label>Full name</label><input id="authFullName" type="text" style="width:100%;" placeholder="e.g. Chandan Kumar"></div>
     <div class="form-field" style="margin-bottom:12px;"><label>Email</label><input id="authEmail" type="email" style="width:100%;" placeholder="you@company.com"></div>
-    <div class="form-field" id="authPasswordField" style="margin-bottom:16px;"><label>Password</label>
+    <div class="form-field" style="margin-bottom:6px;"><label>Password</label>
       <div class="password-wrap">
         <input id="authPassword" type="password" style="width:100%;" placeholder="••••••••">
         <button type="button" class="password-toggle" onclick="togglePasswordVisibility('authPassword', this)" aria-label="Show password" title="Show password">
@@ -54,25 +47,34 @@
         </button>
       </div>
     </div>
-    <div class="auth-forgot-row" id="authForgotRow">
-      <button type="button" class="link-btn" onclick="switchAuthMode('forgot')">Forgot password?</button>
-    </div>
+    <p class="forgot-password-link" id="forgotPasswordLink" onclick="showForgotPasswordForm()">Forgot password?</p>
     <button class="btn btn-primary" style="width:100%;" id="authSubmitBtn" onclick="handleAuthSubmit()">Sign in</button>
     <p id="authMessage" class="auth-message"></p>
   </div>
 </div>
 
-<!-- RESET PASSWORD SCREEN — shown after clicking the emailed reset link -->
+<!-- FORGOT PASSWORD — request reset email -->
+<div id="forgotPasswordScreen" class="auth-wrap" style="display:none;">
+  <div class="auth-card">
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Reset your password</p>
+    <p class="brand-eyebrow" style="margin-bottom:22px;">We'll email you a link to reset it</p>
+    <div class="form-field" style="margin-bottom:16px;text-align:left;"><label>Email</label><input id="forgotEmail" type="email" style="width:100%;" placeholder="you@company.com"></div>
+    <button class="btn btn-primary" style="width:100%;" onclick="handleSendPasswordReset()">Send reset link</button>
+    <p class="forgot-password-link" onclick="hideForgotPasswordForm()">Back to sign in</p>
+    <p id="forgotPasswordMessage" class="auth-message"></p>
+  </div>
+</div>
+
+<!-- SET NEW PASSWORD — shown after clicking the emailed reset link -->
 <div id="resetPasswordScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
     <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
-    <div class="auth-header">
-      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
-      <p class="brand-eyebrow" style="margin-bottom:22px;">Set a new password</p>
-    </div>
-    <div class="form-field" style="margin-bottom:12px;"><label>New password</label><input id="resetNewPassword" type="password" style="width:100%;" placeholder="At least 6 characters"></div>
-    <div class="form-field" style="margin-bottom:16px;"><label>Confirm new password</label><input id="resetConfirmPassword" type="password" style="width:100%;" placeholder="Repeat it"></div>
-    <button class="btn btn-primary" style="width:100%;" onclick="handleResetPasswordSubmit()">Update password</button>
+    <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Set a new password</p>
+    <p class="brand-eyebrow" style="margin-bottom:22px;">Choose a new password for your account</p>
+    <div class="form-field" style="margin-bottom:12px;text-align:left;"><label>New password</label><input id="resetNewPassword" type="password" style="width:100%;" placeholder="At least 6 characters"></div>
+    <div class="form-field" style="margin-bottom:16px;text-align:left;"><label>Confirm new password</label><input id="resetConfirmPassword" type="password" style="width:100%;" placeholder="Repeat it"></div>
+    <button class="btn btn-primary" style="width:100%;" onclick="handleCompletePasswordReset()">Update password &amp; sign in</button>
     <p id="resetPasswordMessage" class="auth-message"></p>
   </div>
 </div>
@@ -81,10 +83,8 @@
 <div id="pendingScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
     <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
-    <div class="auth-header">
-      <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
-      <p class="brand-eyebrow" style="margin-bottom:16px;">Serialized inventory · physical verification</p>
-    </div>
+    <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
+    <p class="brand-eyebrow" style="margin-bottom:16px;">Serialized inventory · physical verification</p>
     <p class="hint" style="margin-bottom:20px;color:var(--text-faint);">Your account (<span id="pendingEmail" style="color:var(--text);"></span>) is created but hasn't been approved yet. Ask your admin to approve your access and assign you to a store — this page will unlock once that's done.</p>
     <div class="btn-row"><button class="btn" onclick="checkApprovalAgain()">Check again</button><button class="btn btn-danger" onclick="handleSignOut()">Sign out</button></div>
   </div>
@@ -191,8 +191,8 @@
   <main class="main-content">
 
     <div class="topbar">
-      <button class="topbar-iconbtn" id="topbarBackBtn" onclick="handleBackNav()" title="Go back" style="display:none;">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+      <button class="topbar-iconbtn" id="routeBackBtn" onclick="goBack()" title="Go back" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
       </button>
       <div class="topbar-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -422,19 +422,22 @@
     </div>
     <div class="card">
       <h4>Edit profile</h4>
-      <p class="hint">This name is shown across the app instead of your email — set it up once and it'll appear on the dashboard, admin lists and everywhere else.</p>
-      <div class="profile-edit-row">
-        <div class="profile-avatar-preview" id="profileAvatarPreview">–</div>
-        <div>
-          <label class="btn" for="avatarFileInput" style="display:inline-flex;">Change photo</label>
-          <input type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="handleAvatarUpload(event)">
-          <p class="hint" style="margin:6px 0 0;">JPG, PNG or WEBP, up to 2MB.</p>
+      <p class="hint">Set your name and a profile picture — this is what shows up around the app instead of your raw email.</p>
+      <div class="edit-profile-row">
+        <div class="avatar-upload-wrap">
+          <div class="avatar-upload-preview" id="avatarPreview" onclick="document.getElementById('avatarFileInput').click()" title="Click to change photo" style="cursor:pointer;">–</div>
+          <div class="avatar-upload-btns">
+            <label class="btn" for="avatarFileInput">Change photo</label>
+            <button class="btn btn-danger" id="removeAvatarBtn" onclick="handleDeleteAvatar()" style="display:none;">Remove photo</button>
+          </div>
+          <input type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="openAvatarCropper(event)">
+        </div>
+        <div class="form-field" style="flex:1;min-width:200px;">
+          <label>Full name</label>
+          <input id="profileFullName" type="text" placeholder="e.g. Chandan Kumar">
         </div>
       </div>
-      <div class="form-grid" style="grid-template-columns:1fr;max-width:360px;margin-top:16px;">
-        <div class="form-field"><label>Full name</label><input id="profileFullName" placeholder="e.g. Chandan Kumar"></div>
-      </div>
-      <button class="btn btn-primary" onclick="handleSaveProfileName()">Save name</button>
+      <button class="btn btn-primary" onclick="handleSaveProfile()">Save changes</button>
     </div>
     <div class="card">
       <h4>Appearance</h4>
@@ -462,6 +465,26 @@
   </div>
   </main>
 </div>
+</div>
+
+<!-- AVATAR CROP MODAL -->
+<div id="cropModalOverlay" class="crop-modal-overlay" style="display:none;">
+  <div class="crop-modal">
+    <h4 style="margin:0 0 4px;">Adjust your photo</h4>
+    <p class="hint" style="margin:0 0 16px;">Drag to reposition, use the slider to zoom.</p>
+    <div class="crop-stage" id="cropStage" onmousedown="cropDragStart(event)" ontouchstart="cropDragStart(event)">
+      <img id="cropImage" class="crop-image" draggable="false" alt="Crop preview">
+      <div class="crop-ring"></div>
+    </div>
+    <div class="crop-zoom-row">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6"/><path d="M20 20l-4.35-4.35"/></svg>
+      <input type="range" id="cropZoomSlider" min="1" max="3" step="0.01" value="1" oninput="cropUpdateZoom(this.value)">
+    </div>
+    <div class="btn-row" style="justify-content:flex-end;margin-top:16px;">
+      <button class="btn" onclick="closeAvatarCropper()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCroppedAvatar()">Save photo</button>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>

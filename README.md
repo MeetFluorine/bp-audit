@@ -12,7 +12,6 @@ css/style.css        — all styling
 js/config.js         — Supabase project URL/key + store master list (edit this per deployment)
 js/app.js            — all application logic
 supabase/schema.sql   — full database schema + security policies (run once per Supabase project)
-supabase/add_profile_fields.sql — patch for existing projects: adds name/photo fields + the avatars storage bucket (already folded into schema.sql for new projects)
 .gitignore
 README.md
 ```
@@ -31,6 +30,9 @@ New sign-ups are **not** usable until an admin approves them from the Admin tab 
 3. Go to **Authentication → Providers → Email** and turn **off** "Confirm email." (Supabase's built-in email sender is rate-limited to a handful of emails per hour — fine for occasional use, but since access is already gated by admin approval, email confirmation is redundant friction here.)
 4. Go to **Project Settings → API Keys**, copy your **Project URL** and **anon/public key**.
 5. Open `js/config.js` and replace `SUPABASE_URL` and `SUPABASE_ANON_KEY` with your own values.
+6. Go to **Authentication → URL Configuration** and add the exact URL you'll deploy this to (e.g. `https://yourname.github.io/reponame/`) under **Redirect URLs**. This is required for the "Forgot password" email link to work — Supabase rejects password-reset redirects to any URL that isn't on this allowlist.
+
+> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database, then do step 6 above if you haven't already (needed for the new Forgot Password feature).
 
 > **Is it safe to commit the anon key to a public GitHub repo?** Yes — the anon/public key is specifically designed to be exposed in client-side code; that's its purpose. Real protection comes from the Row Level Security policies in `schema.sql`, not from hiding this key. Never put the **service_role** key anywhere in this project — it grants full admin access to your database and must never appear in browser-side code.
 
@@ -43,13 +45,6 @@ New sign-ups are **not** usable until an admin approves them from the Admin tab 
 5. Any time you edit `js/config.js`, `js/app.js`, or `css/style.css` and push, GitHub Pages redeploys automatically.
 
 (Netlify or Vercel work identically — just point them at this same folder; no build step is needed since this is a plain static site.)
-
-## Updating an existing project (profile name/photo + forgot password)
-
-If your Supabase project was set up before this change, run two things once:
-
-1. **SQL Editor → New query** — paste and run `supabase/add_profile_fields.sql`. (Brand-new projects don't need this — it's already included in `schema.sql`.)
-2. **Authentication → URL Configuration** — add your deployed site's URL (e.g. `https://yourusername.github.io/reponame/`) to **Redirect URLs**. Without this, the "Forgot password?" email link won't be allowed to bring people back to the app.
 
 ## Bootstrapping your first admin
 

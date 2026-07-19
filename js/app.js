@@ -42,7 +42,12 @@ function themeColor(varName){
 }
 
 // ---------------- SMALL DISPLAY HELPERS ----------------
-function initialsFor(email){
+function initialsFor(email, fullName){
+  if(fullName && fullName.trim()){
+    const parts = fullName.trim().split(/\s+/).filter(Boolean);
+    if(parts.length === 1) return parts[0].slice(0,2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
   if(!email) return '?';
   const namePart = email.split('@')[0].replace(/[._-]+/g, ' ').trim();
   const parts = namePart.split(' ').filter(Boolean);
@@ -50,35 +55,11 @@ function initialsFor(email){
   if(parts.length === 1) return parts[0].slice(0,2).toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
-function displayNameFor(email){
+function displayNameFor(email, fullName){
+  if(fullName && fullName.trim()) return fullName.trim();
   if(!email) return 'there';
   const namePart = email.split('@')[0].replace(/[._-]+/g, ' ').trim();
   return namePart.split(' ').filter(Boolean).map(w => w[0].toUpperCase()+w.slice(1)).join(' ') || email;
-}
-function escHtml(s){
-  return String(s==null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-// Prefer the name the user set up in their profile; fall back to deriving one from the email.
-function profileDisplayName(profile, email){
-  if(profile && profile.full_name && profile.full_name.trim()) return profile.full_name.trim();
-  return displayNameFor(email);
-}
-function profileInitials(profile, email){
-  if(profile && profile.full_name && profile.full_name.trim()){
-    const parts = profile.full_name.trim().split(/\s+/).filter(Boolean);
-    if(!parts.length) return initialsFor(email);
-    if(parts.length === 1) return parts[0].slice(0,2).toUpperCase();
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  }
-  return initialsFor(email);
-}
-// Small avatar-or-initials snippet used inside admin lists.
-function avatarChipHTML(profile, email, size){
-  const s = size || 30;
-  const initials = escHtml(profileInitials(profile, email));
-  const url = profile && profile.avatar_url;
-  const inner = url ? `<img src="${escHtml(url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : initials;
-  return `<div style="width:${s}px;height:${s}px;border-radius:50%;background:var(--steel);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:700;font-size:${Math.round(s*0.4)}px;flex-shrink:0;overflow:hidden;">${inner}</div>`;
 }
 function greetingWord(){
   const h = new Date().getHours();
@@ -89,15 +70,19 @@ function greetingWord(){
 function updateTopbarUser(){
   if(!currentUser) return;
   const email = currentUser.email;
+  const fullName = currentProfile ? currentProfile.full_name : null;
+  const avatarUrl = currentProfile ? currentProfile.avatar_url : null;
   const role = currentProfile ? currentProfile.role : '';
-  const name = profileDisplayName(currentProfile, email);
-  const initials = escHtml(profileInitials(currentProfile, email));
-  const avatarUrl = currentProfile && currentProfile.avatar_url;
-  const avatarInner = avatarUrl ? `<img src="${escHtml(avatarUrl)}" alt="">` : initials;
-  ['sidebarAvatar','topbarAvatar'].forEach(id => { const el = document.getElementById(id); if(el) el.innerHTML = avatarInner; });
+  const initials = initialsFor(email, fullName);
+  const name = displayNameFor(email, fullName);
+  ['sidebarAvatar','topbarAvatar'].forEach(id => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    if(avatarUrl){ el.innerHTML = `<img src="${avatarUrl}" alt="${name}" class="avatar-img">`; }
+    else { el.textContent = initials; }
+  });
   const tName = document.getElementById('topbarAvatarName'); if(tName) tName.textContent = name;
   const tRole = document.getElementById('topbarAvatarRole'); if(tRole) tRole.textContent = role === 'admin' ? 'Administrator' : 'Auditor';
-  const whoEl = document.getElementById('whoAmI'); if(whoEl) whoEl.textContent = `${name} · ${role}`;
   const greetEl = document.getElementById('greetTitle');
   if(greetEl) greetEl.textContent = `${greetingWord()}, ${name} \ud83d\udc4b`;
 }
@@ -215,21 +200,11 @@ function switchAuthMode(mode){
   authMode = mode;
   document.getElementById('authTabSignin').classList.toggle('active', mode==='signin');
   document.getElementById('authTabSignup').classList.toggle('active', mode==='signup');
-
-  const tabs = document.getElementById('authTabs');
-  const fullNameField = document.getElementById('authFullNameField');
-  const passwordField = document.getElementById('authPasswordField');
-  const forgotRow = document.getElementById('authForgotRow');
-  const backRow = document.getElementById('authBackRow');
-
-  if(tabs) tabs.style.display = (mode === 'forgot') ? 'none' : 'flex';
-  if(fullNameField) fullNameField.style.display = (mode === 'signup') ? 'block' : 'none';
-  if(passwordField) passwordField.style.display = (mode === 'forgot') ? 'none' : 'block';
-  if(forgotRow) forgotRow.style.display = (mode === 'signin') ? 'flex' : 'none';
-  if(backRow) backRow.style.display = (mode === 'forgot') ? 'block' : 'none';
-
-  document.getElementById('authSubmitBtn').textContent = mode==='signin' ? 'Sign in' : mode==='signup' ? 'Create account' : 'Send reset link';
+  document.getElementById('authSubmitBtn').textContent = mode==='signin' ? 'Sign in' : 'Create account';
   document.getElementById('authMessage').textContent = '';
+  document.getElementById('authNameField').style.display = mode==='signup' ? '' : 'none';
+  const forgotLink = document.getElementById('forgotPasswordLink');
+  if(forgotLink) forgotLink.style.display = mode==='signin' ? '' : 'none';
 }
 
 function setAuthMessage(text, isError){
@@ -241,35 +216,21 @@ function setAuthMessage(text, isError){
 async function handleAuthSubmit(){
   if(!sb){ setAuthMessage('Supabase library failed to load — check your connection and reload.', true); return; }
   const email = document.getElementById('authEmail').value.trim();
-
-  if(authMode === 'forgot'){
-    if(!email){ setAuthMessage('Enter your account email.', true); return; }
-    setAuthMessage('Sending reset link…', false);
-    try{
-      const redirectTo = window.location.origin + window.location.pathname;
-      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
-      if(error) throw error;
-      setAuthMessage('Check your email for a password reset link.', false);
-    }catch(e){
-      setAuthMessage(errMsg(e), true);
-    }
-    return;
-  }
-
   const password = document.getElementById('authPassword').value;
+  const fullName = document.getElementById('authFullName').value.trim();
   if(!email || !password){ setAuthMessage('Enter both email and password.', true); return; }
-
-  let fullName = '';
-  if(authMode === 'signup'){
-    fullName = document.getElementById('authFullName').value.trim();
-    if(!fullName){ setAuthMessage('Enter your full name.', true); return; }
-  }
+  if(authMode === 'signup' && !fullName){ setAuthMessage('Enter your full name.', true); return; }
 
   setAuthMessage(authMode==='signin' ? 'Signing in…' : 'Creating account…', false);
   try{
     if(authMode === 'signup'){
       const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
       if(error) throw error;
+      // Belt-and-suspenders: also write the name directly in case the
+      // signup trigger runs before the session is fully established.
+      if(data && data.user){
+        await sb.from('profiles').update({ full_name: fullName }).eq('id', data.user.id);
+      }
       setAuthMessage('Account created. Waiting for admin approval — you can sign in once approved.', false);
     } else {
       const { data, error } = await sb.auth.signInWithPassword({ email, password });
@@ -282,39 +243,18 @@ async function handleAuthSubmit(){
   }
 }
 
-async function handleResetPasswordSubmit(){
-  const msgEl = document.getElementById('resetPasswordMessage');
-  const pw = document.getElementById('resetNewPassword').value;
-  const confirmPw = document.getElementById('resetConfirmPassword').value;
-  const setMsg = (text, isError) => { msgEl.textContent = text; msgEl.className = 'auth-message ' + (isError ? 'error' : 'ok'); };
-  if(!pw || pw.length < 6){ setMsg('Password must be at least 6 characters.', true); return; }
-  if(pw !== confirmPw){ setMsg('Passwords do not match.', true); return; }
-  try{
-    const { error } = await sb.auth.updateUser({ password: pw });
-    if(error) throw error;
-    setMsg('Password updated — signing you in…', false);
-    setTimeout(async () => {
-      document.getElementById('resetPasswordScreen').style.display = 'none';
-      await onLoginSuccess();
-    }, 800);
-  }catch(e){
-    setMsg(errMsg(e), true);
-  }
-}
-
 async function handleSignOut(){
   if(sb) await sb.auth.signOut();
   currentUser = null; currentProfile = null; myAssignedStores = [];
   document.body.className = '';
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('pendingScreen').style.display = 'none';
-  const resetScreen = document.getElementById('resetPasswordScreen'); if(resetScreen) resetScreen.style.display = 'none';
   document.getElementById('authScreen').style.display = 'flex';
   document.getElementById('authEmail').value = '';
   document.getElementById('authPassword').value = '';
-  switchAuthMode('signin');
-  try{ history.replaceState(null, '', window.location.pathname + window.location.search); }catch(e){}
+  document.getElementById('authFullName').value = '';
   setAuthMessage('', false);
+  history.replaceState(null, '', window.location.pathname);
 }
 
 async function checkApprovalAgain(){
@@ -368,15 +308,23 @@ async function onLoginSuccess(knownUser){
     document.getElementById('pendingScreen').style.display = 'none';
     document.getElementById('appRoot').style.display = 'block';
     document.body.className = (profile.role === 'admin' ? 'role-admin' : 'role-user') + (document.body.classList.contains('theme-dark') ? ' theme-dark' : '');
+    const whoAmIEl = document.getElementById('whoAmI');
+    whoAmIEl.textContent = `${displayNameFor(user.email, profile.full_name)} · ${profile.role}`;
+    whoAmIEl.title = user.email;
     updateTopbarUser();
+
+    const requestedStep = location.hash.replace('#','');
+    const wantsAdminOnlyPage = ['setup','dashboard','admin'].includes(requestedStep);
 
     if(profile.role !== 'admin'){
       const { data: assigned } = await sb.from('user_stores').select('store_code').eq('user_id', user.id);
       myAssignedStores = (assigned || []).map(r => r.store_code);
-      showStep('scan');
+      const landing = (VALID_ROUTE_STEPS.includes(requestedStep) && !wantsAdminOnlyPage) ? requestedStep : 'scan';
+      showStep(landing, true);
     } else {
       myAssignedStores = [];
-      showStep('dashboard');
+      const landing = VALID_ROUTE_STEPS.includes(requestedStep) ? requestedStep : 'dashboard';
+      showStep(landing, true);
     }
 
     if(profile.role === 'admin') renderAdminPanel();
@@ -397,12 +345,7 @@ async function renderAdminPanel(){
     if(pendErr) throw pendErr;
     const pendBody = document.getElementById('pendingUsersBody');
     pendBody.innerHTML = (pending && pending.length) ? pending.map(p => `
-      <tr><td>
-        <div style="display:flex;align-items:center;gap:10px;">
-          ${avatarChipHTML(p, p.email, 28)}
-          <div><div style="font-weight:600;color:var(--text);">${escHtml(profileDisplayName(p, p.email))}</div><div style="font-family:var(--font-mono);font-size:11px;color:var(--text-faint);">${escHtml(p.email)}</div></div>
-        </div>
-      </td><td>${new Date(p.created_at).toLocaleDateString()}</td>
+      <tr><td>${displayNameFor(p.email, p.full_name)}<br><span style="color:var(--text-faint);font-size:11px;">${p.email}</span></td><td>${new Date(p.created_at).toLocaleDateString()}</td>
       <td><div class="btn-row"><button class="btn btn-primary" onclick="approveUser('${p.id}')">Approve</button><button class="btn btn-danger" onclick="adminDeleteUser('${p.id}','${p.email.replace(/'/g,"\\'")}')">Reject</button></div></td></tr>`).join('')
       : '<tr><td colspan="3" class="empty-note">No pending sign-ups.</td></tr>';
 
@@ -416,11 +359,9 @@ async function renderAdminPanel(){
     listEl.innerHTML = (approvedUsers || []).map(u => {
       const myStores = new Set((allAssignments||[]).filter(a=>a.user_id===u.id).map(a=>a.store_code));
       const chips = storeCodes.map(sc => `<span class="store-chip ${myStores.has(sc)?'active':''}" onclick="toggleStoreAssignment('${u.id}','${sc}',${myStores.has(sc)})">${sc}</span>`).join('');
+      const avatarHtml = u.avatar_url ? `<img src="${u.avatar_url}" alt="" class="avatar-img">` : initialsFor(u.email, u.full_name);
       return `<div class="user-row">
-        <div class="user-row-email" style="display:flex;align-items:center;gap:10px;">
-          ${avatarChipHTML(u, u.email, 30)}
-          <div><div>${escHtml(profileDisplayName(u, u.email))} <span class="role-pill ${u.role}">${u.role}</span></div><div style="font-family:var(--font-mono);font-size:11px;color:var(--text-faint);margin-top:2px;">${escHtml(u.email)}</div></div>
-        </div>
+        <div class="user-row-email"><span class="user-avatar-sm">${avatarHtml}</span> ${displayNameFor(u.email, u.full_name)} <span class="role-pill ${u.role}">${u.role}</span><br><span style="color:var(--text-faint);font-size:11px;margin-left:34px;">${u.email}</span></div>
         <div class="user-row-stores">${chips}</div>
         <div class="btn-row">
           ${u.role!=='admin' ? `<button class="btn" onclick="promoteToAdmin('${u.id}')">Make admin</button>` : ''}
@@ -497,69 +438,185 @@ async function renderProfilePanel(){
     ? 'All stores (admin)'
     : (myAssignedStores.length ? myAssignedStores.join(', ') : 'None assigned yet — contact your admin');
   document.getElementById('profileInfo').innerHTML = `
-    Name: ${escHtml(profileDisplayName(currentProfile, currentUser.email))}<br>
-    Email: ${escHtml(currentUser.email)}<br>
-    Role: ${escHtml(currentProfile.role)}<br>
+    Name: ${displayNameFor(currentUser.email, currentProfile.full_name)}<br>
+    Email: ${currentUser.email}<br>
+    Role: ${currentProfile.role}<br>
     Approved: ${currentProfile.approved ? 'Yes' : 'No'}<br>
-    Assigned stores: ${escHtml(storesLine)}`;
+    Assigned stores: ${storesLine}`;
 
   const nameInput = document.getElementById('profileFullName');
-  if(nameInput && document.activeElement !== nameInput) nameInput.value = currentProfile.full_name || '';
-
-  const preview = document.getElementById('profileAvatarPreview');
+  if(nameInput) nameInput.value = currentProfile.full_name || '';
+  const preview = document.getElementById('avatarPreview');
   if(preview){
-    preview.innerHTML = currentProfile.avatar_url
-      ? `<img src="${escHtml(currentProfile.avatar_url)}" alt="">`
-      : escHtml(profileInitials(currentProfile, currentUser.email));
+    if(currentProfile.avatar_url) preview.innerHTML = `<img src="${currentProfile.avatar_url}" alt="Avatar" class="avatar-img">`;
+    else preview.textContent = initialsFor(currentUser.email, currentProfile.full_name);
   }
+  const removeBtn = document.getElementById('removeAvatarBtn');
+  if(removeBtn) removeBtn.style.display = currentProfile.avatar_url ? '' : 'none';
 }
 
-async function handleSaveProfileName(){
+async function handleSaveProfile(){
   if(!currentUser) return;
-  const nameInput = document.getElementById('profileFullName');
-  const name = nameInput.value.trim();
-  if(!name){ showMessage('Enter a name first.', true); return; }
+  const name = document.getElementById('profileFullName').value.trim();
+  if(!name){ showMessage('Enter a name before saving.', true); return; }
   try{
     const { error } = await sb.from('profiles').update({ full_name: name }).eq('id', currentUser.id);
     if(error) throw error;
     currentProfile.full_name = name;
     updateTopbarUser();
     renderProfilePanel();
-    if(currentProfile.role === 'admin') renderAdminPanel();
-    showMessage('Name updated.');
+    showMessage('Profile updated.');
   }catch(e){
     console.error(e);
-    showMessage('Could not update name: ' + errMsg(e), true);
+    showMessage('Could not update profile: ' + errMsg(e), true);
   }
 }
 
-async function handleAvatarUpload(event){
-  const input = event.target;
-  const file = input.files && input.files[0];
+// ---------------- AVATAR CROP TOOL ----------------
+const CROP_STAGE_SIZE = 260;
+const CROP_OUTPUT_SIZE = 320;
+let cropState = { natW:0, natH:0, baseScale:1, zoom:1, offsetX:0, offsetY:0 };
+let cropDrag = { active:false, startX:0, startY:0, startOffsetX:0, startOffsetY:0 };
+
+function openAvatarCropper(event){
+  const file = event.target.files[0];
   if(!file || !currentUser) return;
-  if(!/^image\/(png|jpe?g|webp)$/.test(file.type)){ showMessage('Please choose a PNG, JPG or WEBP image.', true); input.value = ''; return; }
-  if(file.size > 2*1024*1024){ showMessage('Image must be under 2MB.', true); input.value = ''; return; }
-  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g,'') || 'jpg';
-  const path = `${currentUser.id}/avatar.${ext}`;
-  try{
+  if(file.size > 8 * 1024 * 1024){ showMessage('Image must be under 8MB.', true); event.target.value=''; return; }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = document.getElementById('cropImage');
+    img.onload = () => {
+      cropState.natW = img.naturalWidth;
+      cropState.natH = img.naturalHeight;
+      cropState.baseScale = Math.max(CROP_STAGE_SIZE / img.naturalWidth, CROP_STAGE_SIZE / img.naturalHeight);
+      cropState.zoom = 1;
+      cropState.offsetX = 0;
+      cropState.offsetY = 0;
+      document.getElementById('cropZoomSlider').value = 1;
+      cropApplyTransform();
+      document.getElementById('cropModalOverlay').style.display = 'flex';
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+}
+
+function closeAvatarCropper(){
+  document.getElementById('cropModalOverlay').style.display = 'none';
+}
+
+function cropApplyTransform(){
+  const img = document.getElementById('cropImage');
+  const effectiveScale = cropState.baseScale * cropState.zoom;
+  img.style.width = (cropState.natW * effectiveScale) + 'px';
+  img.style.height = (cropState.natH * effectiveScale) + 'px';
+  img.style.transform = `translate(calc(-50% + ${cropState.offsetX}px), calc(-50% + ${cropState.offsetY}px))`;
+}
+
+function cropClampOffsets(){
+  const effectiveScale = cropState.baseScale * cropState.zoom;
+  const scaledW = cropState.natW * effectiveScale;
+  const scaledH = cropState.natH * effectiveScale;
+  const maxX = Math.max(0, (scaledW - CROP_STAGE_SIZE) / 2);
+  const maxY = Math.max(0, (scaledH - CROP_STAGE_SIZE) / 2);
+  cropState.offsetX = Math.min(maxX, Math.max(-maxX, cropState.offsetX));
+  cropState.offsetY = Math.min(maxY, Math.max(-maxY, cropState.offsetY));
+}
+
+function cropUpdateZoom(val){
+  cropState.zoom = parseFloat(val);
+  cropClampOffsets();
+  cropApplyTransform();
+}
+
+function cropDragStart(event){
+  event.preventDefault();
+  const point = event.touches ? event.touches[0] : event;
+  cropDrag.active = true;
+  cropDrag.startX = point.clientX;
+  cropDrag.startY = point.clientY;
+  cropDrag.startOffsetX = cropState.offsetX;
+  cropDrag.startOffsetY = cropState.offsetY;
+  window.addEventListener('mousemove', cropDragMove);
+  window.addEventListener('touchmove', cropDragMove, { passive:false });
+  window.addEventListener('mouseup', cropDragEnd);
+  window.addEventListener('touchend', cropDragEnd);
+}
+function cropDragMove(event){
+  if(!cropDrag.active) return;
+  event.preventDefault();
+  const point = event.touches ? event.touches[0] : event;
+  cropState.offsetX = cropDrag.startOffsetX + (point.clientX - cropDrag.startX);
+  cropState.offsetY = cropDrag.startOffsetY + (point.clientY - cropDrag.startY);
+  cropClampOffsets();
+  cropApplyTransform();
+}
+function cropDragEnd(){
+  cropDrag.active = false;
+  window.removeEventListener('mousemove', cropDragMove);
+  window.removeEventListener('touchmove', cropDragMove);
+  window.removeEventListener('mouseup', cropDragEnd);
+  window.removeEventListener('touchend', cropDragEnd);
+}
+
+async function saveCroppedAvatar(){
+  if(!currentUser) return;
+  const img = document.getElementById('cropImage');
+  const effectiveScale = cropState.baseScale * cropState.zoom;
+  const cropSizeInImagePx = CROP_STAGE_SIZE / effectiveScale;
+  const centerXInImagePx = cropState.natW / 2 - cropState.offsetX / effectiveScale;
+  const centerYInImagePx = cropState.natH / 2 - cropState.offsetY / effectiveScale;
+  const sx = centerXInImagePx - cropSizeInImagePx / 2;
+  const sy = centerYInImagePx - cropSizeInImagePx / 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = CROP_OUTPUT_SIZE;
+  canvas.height = CROP_OUTPUT_SIZE;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, sx, sy, cropSizeInImagePx, cropSizeInImagePx, 0, 0, CROP_OUTPUT_SIZE, CROP_OUTPUT_SIZE);
+
+  canvas.toBlob(async (blob) => {
+    if(!blob){ showMessage('Could not process image.', true); return; }
+    closeAvatarCropper();
     showMessage('Uploading photo…');
-    const { error: upErr } = await sb.storage.from('avatars').upload(path, file, { upsert: true, cacheControl: '3600' });
-    if(upErr) throw upErr;
-    const { data: pub } = sb.storage.from('avatars').getPublicUrl(path);
-    const avatarUrl = pub.publicUrl + '?t=' + Date.now();
-    const { error: updErr } = await sb.from('profiles').update({ avatar_url: avatarUrl }).eq('id', currentUser.id);
-    if(updErr) throw updErr;
-    currentProfile.avatar_url = avatarUrl;
-    updateTopbarUser();
-    renderProfilePanel();
-    if(currentProfile.role === 'admin') renderAdminPanel();
-    showMessage('Profile photo updated.');
-  }catch(e){
-    console.error(e);
-    showMessage('Could not upload photo: ' + errMsg(e) + ' — make sure the "avatars" storage bucket has been set up (see supabase/add_profile_fields.sql).', true);
-  }finally{
-    input.value = '';
-  }
+    try{
+      const path = `${currentUser.id}/avatar.png`;
+      const { error: uploadErr } = await sb.storage.from('avatars').upload(path, blob, { upsert: true, cacheControl: '3600', contentType: 'image/png' });
+      if(uploadErr) throw uploadErr;
+      const { data: pub } = sb.storage.from('avatars').getPublicUrl(path);
+      const avatarUrl = pub.publicUrl + '?t=' + Date.now(); // cache-bust so the new photo shows immediately
+      const { error: updateErr } = await sb.from('profiles').update({ avatar_url: avatarUrl }).eq('id', currentUser.id);
+      if(updateErr) throw updateErr;
+      currentProfile.avatar_url = avatarUrl;
+      updateTopbarUser();
+      renderProfilePanel();
+      showMessage('Profile photo updated.');
+    }catch(e){
+      console.error(e);
+      showMessage('Could not upload photo: ' + errMsg(e), true);
+    }
+  }, 'image/png', 0.92);
+}
+
+function handleDeleteAvatar(){
+  if(!currentUser || !currentProfile || !currentProfile.avatar_url) return;
+  confirmAction('delete-avatar', 'This removes your profile photo', async () => {
+    try{
+      const path = `${currentUser.id}/avatar.png`;
+      const { error: removeErr } = await sb.storage.from('avatars').remove([path]);
+      if(removeErr) throw removeErr;
+      const { error: updateErr } = await sb.from('profiles').update({ avatar_url: null }).eq('id', currentUser.id);
+      if(updateErr) throw updateErr;
+      currentProfile.avatar_url = null;
+      updateTopbarUser();
+      renderProfilePanel();
+      showMessage('Profile photo removed.');
+    }catch(e){
+      console.error(e);
+      showMessage('Could not remove photo: ' + errMsg(e), true);
+    }
+  });
 }
 
 async function handleChangePassword(){
@@ -815,14 +872,7 @@ function closeSidebarNav(){
   const backdrop = document.getElementById('navBackdrop'); if(backdrop) backdrop.classList.remove('open');
 }
 
-const VALID_STEPS = ['setup','scan','dashboard','admin','profile'];
-// The "home" tab per role — the Back button hides once you're back here.
-function homeStepForRole(){
-  return (currentProfile && currentProfile.role === 'admin') ? 'dashboard' : 'scan';
-}
-
-function showStep(step, fromPopState){
-  if(VALID_STEPS.indexOf(step) === -1) step = homeStepForRole();
+function showStep(step, skipHistory){
   ['setup','scan','dashboard','admin','profile'].forEach(s => {
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
@@ -832,20 +882,6 @@ function showStep(step, fromPopState){
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
   const labelEl = document.getElementById('sidebarCurrentPageLabel');
   if(labelEl && pageTitles[step]) labelEl.textContent = pageTitles[step];
-
-  // Routing: reflect the current section in the URL hash so the browser's
-  // own back/forward buttons work, and show/hide the in-app Back button.
-  if(!fromPopState){
-    const hash = '#' + step;
-    if(!history.state || !history.state.step){
-      history.replaceState({step}, '', hash);
-    } else if(history.state.step !== step){
-      history.pushState({step}, '', hash);
-    }
-  }
-  const backBtn = document.getElementById('topbarBackBtn');
-  if(backBtn) backBtn.style.display = (step === homeStepForRole()) ? 'none' : 'flex';
-
   // Selecting a page closes the drawer back down to just the hamburger.
   closeSidebarNav();
   stopDashboardPolling();
@@ -853,23 +889,24 @@ function showStep(step, fromPopState){
   if(step==='dashboard'){ renderDashboard(); if(currentProfile && currentProfile.role === 'admin') startDashboardPolling(); }
   if(step==='admin') renderAdminPanel();
   if(step==='profile') renderProfilePanel();
-}
 
-function handleBackNav(){
-  // Prefer real browser history (keeps forward-navigation working); if there's
-  // nothing to go back to within the app, fall back to the role's home tab.
-  if(history.state && history.state.step && history.state.step !== homeStepForRole()){
-    history.back();
-  } else {
-    showStep(homeStepForRole());
+  // Keep the URL in sync so the browser's own Back/Forward buttons work,
+  // and a page can be reloaded/bookmarked directly to a specific section.
+  if(!skipHistory && location.hash.replace('#','') !== step){
+    history.pushState({step}, '', '#'+step);
   }
+  const backBtn = document.getElementById('routeBackBtn');
+  if(backBtn) backBtn.style.display = history.length > 1 ? '' : 'none';
 }
 
-window.addEventListener('popstate', function(e){
-  if(!currentUser || !currentProfile) return; // not logged in yet — nothing to route
-  const step = (e.state && e.state.step) || (location.hash || '').replace('#','') || homeStepForRole();
-  showStep(step, true);
+const VALID_ROUTE_STEPS = ['setup','scan','dashboard','admin','profile'];
+window.addEventListener('popstate', () => {
+  const step = location.hash.replace('#','');
+  if(VALID_ROUTE_STEPS.includes(step) && document.getElementById('appRoot').style.display !== 'none'){
+    showStep(step, true);
+  }
 });
+function goBack(){ history.back(); }
 
 let dashboardPollTimer = null;
 function startDashboardPolling(){
@@ -1567,31 +1604,11 @@ wireDropzone('scanUploadZone', 'scanFileInput');
     return;
   }
 
-  // Register this before the initial getSession() call so a password-recovery
-  // link (which signs the user in with a temporary session) is caught reliably.
-  sb.auth.onAuthStateChange((event) => {
-    if(event === 'PASSWORD_RECOVERY'){
-      document.getElementById('loadingScreen').style.display = 'none';
-      document.getElementById('authScreen').style.display = 'none';
-      document.getElementById('pendingScreen').style.display = 'none';
-      document.getElementById('appRoot').style.display = 'none';
-      document.getElementById('resetPasswordScreen').style.display = 'flex';
-      return;
-    }
-    if(event === 'SIGNED_OUT'){
-      currentUser = null; currentProfile = null; myAssignedStores = [];
-      document.body.className = '';
-      document.getElementById('appRoot').style.display = 'none';
-      document.getElementById('pendingScreen').style.display = 'none';
-      document.getElementById('resetPasswordScreen').style.display = 'none';
-      document.getElementById('loadingScreen').style.display = 'none';
-      document.getElementById('authScreen').style.display = 'flex';
-    }
-  });
-
-  // A reset-password email link lands back here with type=recovery in the URL hash.
-  const isRecoveryLink = /type=recovery/.test(window.location.hash);
-  if(isRecoveryLink){
+  // If this page load is the redirect from a "reset your password" email,
+  // Supabase's client auto-detects the token in the URL and establishes a
+  // temporary recovery session. Route straight to the new-password screen
+  // instead of treating it as a normal sign-in.
+  if(location.hash.includes('type=recovery')){
     document.getElementById('loadingScreen').style.display = 'none';
     document.getElementById('resetPasswordScreen').style.display = 'flex';
     return;
@@ -1604,4 +1621,74 @@ wireDropzone('scanUploadZone', 'scanFileInput');
     document.getElementById('authScreen').style.display = 'flex';
   }
   document.getElementById('loadingScreen').style.display = 'none';
+
+  sb.auth.onAuthStateChange((event) => {
+    if(event === 'PASSWORD_RECOVERY'){
+      ['loadingScreen','authScreen','pendingScreen','forgotPasswordScreen','appRoot'].forEach(id => {
+        const el = document.getElementById(id); if(el) el.style.display = 'none';
+      });
+      document.getElementById('resetPasswordScreen').style.display = 'flex';
+      return;
+    }
+    if(event === 'SIGNED_OUT'){
+      currentUser = null; currentProfile = null; myAssignedStores = [];
+      document.body.className = '';
+      document.getElementById('appRoot').style.display = 'none';
+      document.getElementById('pendingScreen').style.display = 'none';
+      document.getElementById('loadingScreen').style.display = 'none';
+      document.getElementById('authScreen').style.display = 'flex';
+    }
+  });
 })();
+
+// ---------------- FORGOT / RESET PASSWORD ----------------
+function showForgotPasswordForm(){
+  const email = document.getElementById('authEmail').value.trim();
+  document.getElementById('forgotEmail').value = email;
+  document.getElementById('forgotPasswordMessage').textContent = '';
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('forgotPasswordScreen').style.display = 'flex';
+}
+function hideForgotPasswordForm(){
+  document.getElementById('forgotPasswordScreen').style.display = 'none';
+  document.getElementById('authScreen').style.display = 'flex';
+}
+async function handleSendPasswordReset(){
+  if(!sb){ return; }
+  const email = document.getElementById('forgotEmail').value.trim();
+  const msgEl = document.getElementById('forgotPasswordMessage');
+  if(!email){ msgEl.textContent = 'Enter your email first.'; msgEl.className = 'auth-message error'; return; }
+  msgEl.textContent = 'Sending…'; msgEl.className = 'auth-message';
+  try{
+    let redirectTo = window.location.origin + window.location.pathname;
+    redirectTo = redirectTo.replace(/index\.html?$/i, ''); // normalize so it matches a wildcard allow-list entry cleanly
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+    if(error) throw error;
+    msgEl.textContent = 'Check your inbox for a password reset link.';
+    msgEl.className = 'auth-message ok';
+  }catch(e){
+    msgEl.textContent = errMsg(e);
+    msgEl.className = 'auth-message error';
+  }
+}
+async function handleCompletePasswordReset(){
+  if(!sb){ return; }
+  const pw = document.getElementById('resetNewPassword').value;
+  const confirm = document.getElementById('resetConfirmPassword').value;
+  const msgEl = document.getElementById('resetPasswordMessage');
+  if(!pw || pw.length < 6){ msgEl.textContent = 'Password must be at least 6 characters.'; msgEl.className = 'auth-message error'; return; }
+  if(pw !== confirm){ msgEl.textContent = 'Passwords do not match.'; msgEl.className = 'auth-message error'; return; }
+  msgEl.textContent = 'Updating…'; msgEl.className = 'auth-message';
+  try{
+    const { error } = await sb.auth.updateUser({ password: pw });
+    if(error) throw error;
+    msgEl.textContent = 'Password updated! Signing you in…';
+    msgEl.className = 'auth-message ok';
+    history.replaceState(null, '', window.location.pathname);
+    document.getElementById('resetPasswordScreen').style.display = 'none';
+    await onLoginSuccess();
+  }catch(e){
+    msgEl.textContent = errMsg(e);
+    msgEl.className = 'auth-message error';
+  }
+}
