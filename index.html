@@ -144,6 +144,15 @@
         </span>
       </div>
 
+      <p class="nav-group-label admin-only">Reports</p>
+      <div class="nav-item admin-only" id="tab-compare" onclick="showStep('compare')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">Compare Cycles</span>
+          <span class="nav-sub">Trends across audit cycles</span>
+        </span>
+      </div>
+
       <p class="nav-group-label">Settings</p>
       <div class="nav-item" id="tab-profile" onclick="showStep('profile')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span>
@@ -280,6 +289,7 @@
           </div>
         </div>
       </div>
+      <div id="offlineBanner" class="offline-banner" style="display:none;"></div>
       <div id="lockBanner"></div>
       <div class="scan-progress" id="scanProgress"></div>
       <div class="scan-input-row">
@@ -402,15 +412,57 @@
     <div class="card">
       <h4>Pending approval</h4>
       <p class="hint">New sign-ups appear here with no access until you approve them.</p>
+      <div class="bulk-action-bar" id="pendingBulkBar" style="display:none;">
+        <span id="pendingSelectedCount">0 selected</span>
+        <button class="btn btn-primary" onclick="bulkApproveSelected()">Approve selected</button>
+        <button class="btn btn-danger" onclick="bulkRejectSelected()">Reject selected</button>
+      </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Email</th><th>Signed up</th><th></th></tr></thead>
+        <thead><tr><th style="width:36px;"><input type="checkbox" id="pendingSelectAll" onchange="togglePendingSelectAll(this.checked)"></th><th>Email</th><th>Signed up</th><th></th></tr></thead>
         <tbody id="pendingUsersBody"></tbody>
       </table></div>
     </div>
     <div class="card">
       <h4>Approved users & store assignments</h4>
       <p class="hint">Check the stores each auditor should have access to. Unchecking removes their access to that store immediately.</p>
+      <div class="bulk-action-bar" id="approvedBulkBar" style="display:none;">
+        <span id="approvedSelectedCount">0 selected</span>
+        <select id="bulkAssignStoreSelect" style="max-width:180px;">
+          <option value="">Pick a store…</option>
+        </select>
+        <button class="btn btn-primary" onclick="bulkAssignStoreToSelected()">Assign to selected</button>
+        <button class="btn" onclick="bulkUnassignStoreFromSelected()">Unassign from selected</button>
+        <label style="display:flex;align-items:center;gap:6px;margin-left:auto;"><input type="checkbox" onchange="toggleApprovedSelectAll(this.checked)" id="approvedSelectAllInline">Select all</label>
+      </div>
       <div id="approvedUsersList"></div>
+    </div>
+  </div>
+
+  <!-- COMPARE CYCLES -->
+  <div class="panel-view" id="view-compare">
+    <div class="card">
+      <h4>Compare across audit cycles</h4>
+      <p class="hint">See how match rate trends over time, overall or for a specific store.</p>
+      <div class="compare-controls">
+        <div class="form-field" style="margin:0;">
+          <label>Store</label>
+          <select id="compareStoreSelect" onchange="renderCycleComparison()">
+            <option value="">All stores (average)</option>
+          </select>
+        </div>
+      </div>
+      <div style="position:relative;height:280px;margin-top:18px;">
+        <canvas id="compareTrendChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Cycle-by-cycle detail</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Cycle</th><th>Status</th><th>Expected</th><th>Matched</th><th>Short</th><th>Excess</th><th>Match %</th></tr></thead>
+          <tbody id="compareTableBody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -465,6 +517,20 @@
   </div>
   </main>
 </div>
+</div>
+
+<!-- YES/NO CONFIRM MODAL -->
+<div id="confirmModalOverlay" class="crop-modal-overlay" style="display:none;">
+  <div class="crop-modal confirm-modal">
+    <div class="confirm-modal-icon">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+    </div>
+    <p id="confirmModalMessage" style="text-align:center;margin:14px 0 22px;font-size:14px;color:var(--text);"></p>
+    <div class="btn-row" style="justify-content:center;">
+      <button class="btn" onclick="confirmModalNo()">No, cancel</button>
+      <button class="btn btn-danger" onclick="confirmModalYes()">Yes, continue</button>
+    </div>
+  </div>
 </div>
 
 <!-- AVATAR CROP MODAL -->

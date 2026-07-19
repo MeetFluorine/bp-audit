@@ -243,7 +243,43 @@ async function handleAuthSubmit(){
   }
 }
 
+// ---------------- SESSION AUTO-LOGOUT (for shared/store devices) ----------------
+const IDLE_TIMEOUT_MS = 20 * 60 * 1000; // sign out after 20 minutes of no activity
+const IDLE_WARNING_MS = 60 * 1000; // warn 1 minute before it happens
+let idleTimer = null;
+let idleWarningTimer = null;
+let idleWarningShown = false;
+const IDLE_ACTIVITY_EVENTS = ['mousemove','keydown','click','touchstart','scroll'];
+
+function startIdleTimer(){
+  resetIdleTimer();
+  IDLE_ACTIVITY_EVENTS.forEach(evt => window.addEventListener(evt, resetIdleTimer, { passive: true }));
+}
+function stopIdleTimer(){
+  clearTimeout(idleTimer);
+  clearTimeout(idleWarningTimer);
+  IDLE_ACTIVITY_EVENTS.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
+}
+function resetIdleTimer(){
+  if(!currentUser) return;
+  idleWarningShown = false;
+  clearTimeout(idleTimer);
+  clearTimeout(idleWarningTimer);
+  idleWarningTimer = setTimeout(() => {
+    idleWarningShown = true;
+    showMessage('You\u2019ll be signed out in 1 minute due to inactivity — tap anywhere to stay signed in.', true);
+  }, IDLE_TIMEOUT_MS - IDLE_WARNING_MS);
+  idleTimer = setTimeout(async () => {
+    stopIdleTimer();
+    await handleSignOut();
+    setAuthMessage('Signed out due to inactivity — sign in again to continue.', true);
+  }, IDLE_TIMEOUT_MS);
+}
+
 async function handleSignOut(){
+  stopIdleTimer();
+  unsubscribeRealtime();
+  stopDashboardPolling();
   if(sb) await sb.auth.signOut();
   currentUser = null; currentProfile = null; myAssignedStores = [];
   document.body.className = '';
@@ -328,6 +364,7 @@ async function onLoginSuccess(knownUser){
     }
 
     if(profile.role === 'admin') renderAdminPanel();
+    startIdleTimer();
   }catch(e){
     console.error(e);
     document.getElementById('appRoot').style.display = 'none';
@@ -338,6 +375,77 @@ async function onLoginSuccess(knownUser){
 }
 
 // ---------------- ADMIN PANEL ----------------
+// ---------------- COMPARE CYCLES ----------------
+let compareTrendChartInstance = null;
+
+async function renderCycleComparison(){
+  if(!sb || !currentProfile || currentProfile.role !== 'admin') return;
+  try{
+    const { data: cycles, error: cycErr } = await sb.from('audit_cycles').select('*').order('created_at', {ascending:true});
+    if(cycErr) throw cycErr;
+    const { data: summary, error: sumErr } = await sb.from('cycle_store_summary').select('*');
+    if(sumErr) throw sumErr;
+
+    // Populate the store filter dropdown once with whatever stores actually have data.
+    const storeSelect = document.getElementById('compareStoreSelect');
+    const prevSelected = storeSelect.value;
+    const distinctStores = [...new Set((summary||[]).map(r=>r.store_code))].sort();
+    storeSelect.innerHTML = '<option value="">All stores (average)</option>' + distinctStores.map(s => `<option value="${s}">${s}</option>`).join('');
+    if(distinctStores.includes(prevSelected)) storeSelect.value = prevSelected;
+    const selectedStore = storeSelect.value;
+
+    const rows = (cycles||[]).map(cycle => {
+      const cycleSummaryRows = (summary||[]).filter(r => r.cycle_id === cycle.id && (!selectedStore || r.store_code === selectedStore));
+      const expected = cycleSummaryRows.reduce((s,r)=>s+r.expected_count, 0);
+      const matched = cycleSummaryRows.reduce((s,r)=>s+r.matched_count, 0);
+      const short = cycleSummaryRows.reduce((s,r)=>s+r.short_count, 0);
+      const excess = cycleSummaryRows.reduce((s,r)=>s+r.excess_count, 0);
+      const matchPct = expected ? (matched/expected*100) : null;
+      return { cycle, expected, matched, short, excess, matchPct };
+    }).filter(r => r.expected > 0 || r.matched > 0); // skip cycles with no data at all for this store
+
+    // Trend chart
+    const ctx = document.getElementById('compareTrendChart');
+    if(compareTrendChartInstance) compareTrendChartInstance.destroy();
+    compareTrendChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: rows.map(r => r.cycle.cycle_name),
+        datasets: [{
+          label: 'Match rate %',
+          data: rows.map(r => r.matchPct === null ? null : Number(r.matchPct.toFixed(2))),
+          borderColor: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#16A34A',
+          backgroundColor: 'rgba(22,163,74,0.12)',
+          tension: 0.3, fill: true, spanGaps: true,
+          pointRadius: 4, pointHoverRadius: 6
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.raw === null ? 'No data' : ctx.raw + '% matched' } } }
+      }
+    });
+
+    // Detail table
+    const tbody = document.getElementById('compareTableBody');
+    tbody.innerHTML = rows.length ? rows.slice().reverse().map(r => `
+      <tr>
+        <td>${r.cycle.cycle_name}</td>
+        <td><span class="badge ${r.cycle.completed ? 'badge-match' : 'badge-open'}">${r.cycle.completed ? 'Completed' : 'Live'}</span></td>
+        <td>${r.expected}</td>
+        <td>${r.matched}</td>
+        <td>${r.short}</td>
+        <td>${r.excess}</td>
+        <td>${r.matchPct === null ? '—' : r.matchPct.toFixed(2) + '%'}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="7" class="empty-note">No cycle data yet for this filter.</td></tr>';
+  }catch(e){
+    console.error(e);
+    showMessage('Could not load cycle comparison: ' + errMsg(e), true);
+  }
+}
+
 async function renderAdminPanel(){
   if(!sb || !currentProfile || currentProfile.role !== 'admin') return;
   try{
@@ -345,9 +453,14 @@ async function renderAdminPanel(){
     if(pendErr) throw pendErr;
     const pendBody = document.getElementById('pendingUsersBody');
     pendBody.innerHTML = (pending && pending.length) ? pending.map(p => `
-      <tr><td>${displayNameFor(p.email, p.full_name)}<br><span style="color:var(--text-faint);font-size:11px;">${p.email}</span></td><td>${new Date(p.created_at).toLocaleDateString()}</td>
+      <tr><td><input type="checkbox" class="pending-select-box" data-id="${p.id}" ${selectedPendingIds.has(p.id)?'checked':''} onchange="togglePendingSelect('${p.id}', this.checked)"></td>
+      <td>${displayNameFor(p.email, p.full_name)}<br><span style="color:var(--text-faint);font-size:11px;">${p.email}</span></td><td>${new Date(p.created_at).toLocaleDateString()}</td>
       <td><div class="btn-row"><button class="btn btn-primary" onclick="approveUser('${p.id}')">Approve</button><button class="btn btn-danger" onclick="adminDeleteUser('${p.id}','${p.email.replace(/'/g,"\\'")}')">Reject</button></div></td></tr>`).join('')
-      : '<tr><td colspan="3" class="empty-note">No pending sign-ups.</td></tr>';
+      : '<tr><td colspan="4" class="empty-note">No pending sign-ups.</td></tr>';
+    // Drop selections for anyone no longer pending (e.g. already approved elsewhere).
+    const pendingIdsNow = new Set((pending||[]).map(p=>p.id));
+    [...selectedPendingIds].forEach(id => { if(!pendingIdsNow.has(id)) selectedPendingIds.delete(id); });
+    updatePendingBulkBar();
 
     const { data: approvedUsers, error: apprErr } = await sb.from('profiles').select('*').eq('approved', true).order('email');
     if(apprErr) throw apprErr;
@@ -355,12 +468,19 @@ async function renderAdminPanel(){
     if(assignErr) throw assignErr;
 
     const storeCodes = Object.keys(STORE_MASTER).sort();
+    const bulkStoreSelect = document.getElementById('bulkAssignStoreSelect');
+    if(bulkStoreSelect && !bulkStoreSelect.dataset.populated){
+      bulkStoreSelect.innerHTML = '<option value="">Pick a store…</option>' + storeCodes.map(sc => `<option value="${sc}">${sc}</option>`).join('');
+      bulkStoreSelect.dataset.populated = '1';
+    }
+
     const listEl = document.getElementById('approvedUsersList');
     listEl.innerHTML = (approvedUsers || []).map(u => {
       const myStores = new Set((allAssignments||[]).filter(a=>a.user_id===u.id).map(a=>a.store_code));
       const chips = storeCodes.map(sc => `<span class="store-chip ${myStores.has(sc)?'active':''}" onclick="toggleStoreAssignment('${u.id}','${sc}',${myStores.has(sc)})">${sc}</span>`).join('');
       const avatarHtml = u.avatar_url ? `<img src="${u.avatar_url}" alt="" class="avatar-img">` : initialsFor(u.email, u.full_name);
       return `<div class="user-row">
+        <input type="checkbox" class="approved-select-box" data-id="${u.id}" ${selectedApprovedIds.has(u.id)?'checked':''} onchange="toggleApprovedSelect('${u.id}', this.checked)" style="margin-top:4px;">
         <div class="user-row-email"><span class="user-avatar-sm">${avatarHtml}</span> ${displayNameFor(u.email, u.full_name)} <span class="role-pill ${u.role}">${u.role}</span><br><span style="color:var(--text-faint);font-size:11px;margin-left:34px;">${u.email}</span></div>
         <div class="user-row-stores">${chips}</div>
         <div class="btn-row">
@@ -369,6 +489,9 @@ async function renderAdminPanel(){
         </div>
       </div>`;
     }).join('') || '<div class="empty-note">No approved users yet.</div>';
+    const approvedIdsNow = new Set((approvedUsers||[]).map(u=>u.id));
+    [...selectedApprovedIds].forEach(id => { if(!approvedIdsNow.has(id)) selectedApprovedIds.delete(id); });
+    updateApprovedBulkBar();
   }catch(e){
     console.error(e);
     showMessage('Could not load admin panel: ' + errMsg(e), true);
@@ -427,6 +550,122 @@ async function adminDeleteUser(userId, email){
     }catch(e){
       console.error(e);
       showMessage('Could not delete user: ' + errMsg(e), true);
+    }
+  });
+}
+
+// ---------------- BULK ADMIN ACTIONS ----------------
+function togglePendingSelect(id, checked){
+  if(checked) selectedPendingIds.add(id); else selectedPendingIds.delete(id);
+  updatePendingBulkBar();
+}
+function togglePendingSelectAll(checked){
+  document.querySelectorAll('.pending-select-box').forEach(box => {
+    box.checked = checked;
+    if(checked) selectedPendingIds.add(box.dataset.id); else selectedPendingIds.delete(box.dataset.id);
+  });
+  updatePendingBulkBar();
+}
+function updatePendingBulkBar(){
+  const bar = document.getElementById('pendingBulkBar');
+  const count = document.getElementById('pendingSelectedCount');
+  if(!bar || !count) return;
+  bar.style.display = selectedPendingIds.size ? 'flex' : 'none';
+  count.textContent = `${selectedPendingIds.size} selected`;
+  const selectAllBox = document.getElementById('pendingSelectAll');
+  if(selectAllBox){
+    const allBoxes = document.querySelectorAll('.pending-select-box');
+    selectAllBox.checked = allBoxes.length > 0 && selectedPendingIds.size === allBoxes.length;
+  }
+}
+function bulkApproveSelected(){
+  const ids = [...selectedPendingIds];
+  if(!ids.length) return;
+  confirmAction('bulk-approve', `This approves ${ids.length} user${ids.length===1?'':'s'} at once, giving them access immediately`, async () => {
+    try{
+      const { error } = await sb.from('profiles').update({approved:true}).in('id', ids);
+      if(error) throw error;
+      showMessage(`Approved ${ids.length} user${ids.length===1?'':'s'}.`);
+      selectedPendingIds.clear();
+      renderAdminPanel();
+    }catch(e){
+      console.error(e);
+      showMessage('Could not bulk approve: ' + errMsg(e), true);
+    }
+  });
+}
+function bulkRejectSelected(){
+  const ids = [...selectedPendingIds];
+  if(!ids.length) return;
+  confirmAction('bulk-reject', `This permanently rejects ${ids.length} pending sign-up${ids.length===1?'':'s'}`, async () => {
+    try{
+      const { error } = await sb.from('profiles').delete().in('id', ids);
+      if(error) throw error;
+      showMessage(`Rejected ${ids.length} sign-up${ids.length===1?'':'s'}.`);
+      selectedPendingIds.clear();
+      renderAdminPanel();
+    }catch(e){
+      console.error(e);
+      showMessage('Could not bulk reject: ' + errMsg(e), true);
+    }
+  });
+}
+
+function toggleApprovedSelect(id, checked){
+  if(checked) selectedApprovedIds.add(id); else selectedApprovedIds.delete(id);
+  updateApprovedBulkBar();
+}
+function toggleApprovedSelectAll(checked){
+  document.querySelectorAll('.approved-select-box').forEach(box => {
+    box.checked = checked;
+    if(checked) selectedApprovedIds.add(box.dataset.id); else selectedApprovedIds.delete(box.dataset.id);
+  });
+  updateApprovedBulkBar();
+}
+function updateApprovedBulkBar(){
+  const bar = document.getElementById('approvedBulkBar');
+  const count = document.getElementById('approvedSelectedCount');
+  if(!bar || !count) return;
+  bar.style.display = selectedApprovedIds.size ? 'flex' : 'none';
+  count.textContent = `${selectedApprovedIds.size} selected`;
+  const selectAllBox = document.getElementById('approvedSelectAllInline');
+  if(selectAllBox){
+    const allBoxes = document.querySelectorAll('.approved-select-box');
+    selectAllBox.checked = allBoxes.length > 0 && selectedApprovedIds.size === allBoxes.length;
+  }
+}
+function bulkAssignStoreToSelected(){
+  const ids = [...selectedApprovedIds];
+  const store = document.getElementById('bulkAssignStoreSelect').value;
+  if(!ids.length){ showMessage('Select at least one user first.', true); return; }
+  if(!store){ showMessage('Pick a store to assign.', true); return; }
+  confirmAction('bulk-assign', `This assigns ${store} to ${ids.length} user${ids.length===1?'':'s'}`, async () => {
+    try{
+      const payload = ids.map(id => ({user_id:id, store_code:store}));
+      const { error } = await sb.from('user_stores').upsert(payload, { onConflict: 'user_id,store_code', ignoreDuplicates: true });
+      if(error) throw error;
+      showMessage(`Assigned ${store} to ${ids.length} user${ids.length===1?'':'s'}.`);
+      renderAdminPanel();
+    }catch(e){
+      console.error(e);
+      showMessage('Could not bulk assign: ' + errMsg(e), true);
+    }
+  });
+}
+function bulkUnassignStoreFromSelected(){
+  const ids = [...selectedApprovedIds];
+  const store = document.getElementById('bulkAssignStoreSelect').value;
+  if(!ids.length){ showMessage('Select at least one user first.', true); return; }
+  if(!store){ showMessage('Pick a store to unassign.', true); return; }
+  confirmAction('bulk-unassign', `This removes ${store} access from ${ids.length} user${ids.length===1?'':'s'}`, async () => {
+    try{
+      const { error } = await sb.from('user_stores').delete().in('user_id', ids).eq('store_code', store);
+      if(error) throw error;
+      showMessage(`Removed ${store} from ${ids.length} user${ids.length===1?'':'s'}.`);
+      renderAdminPanel();
+    }catch(e){
+      console.error(e);
+      showMessage('Could not bulk unassign: ' + errMsg(e), true);
     }
   });
 }
@@ -714,6 +953,7 @@ async function connectToCycle(cycle){
   renderScanView();
   if(auditCompleted) reconcile();
   renderDashboard();
+  subscribeToRealtimeUpdates(cycle.id);
 }
 
 async function handleLoadCycle(){
@@ -845,16 +1085,26 @@ function showMessage(text, isWarning){
   el._hideTimer = setTimeout(() => { el.style.display = 'none'; }, 4500);
 }
 
-const pendingConfirms = {};
+let pendingConfirmFn = null;
+let selectedPendingIds = new Set();
+let selectedApprovedIds = new Set();
+
 function confirmAction(key, label, fn){
-  if(pendingConfirms[key]){
-    clearTimeout(pendingConfirms[key]);
-    delete pendingConfirms[key];
-    fn();
-    return;
-  }
-  showMessage(`${label} — click the button again within 4 seconds to confirm.`, true);
-  pendingConfirms[key] = setTimeout(() => { delete pendingConfirms[key]; }, 4000);
+  pendingConfirmFn = fn;
+  document.getElementById('confirmModalMessage').textContent = label + '. Are you sure you want to continue?';
+  document.getElementById('confirmModalOverlay').style.display = 'flex';
+}
+
+function confirmModalYes(){
+  document.getElementById('confirmModalOverlay').style.display = 'none';
+  const fn = pendingConfirmFn;
+  pendingConfirmFn = null;
+  if(fn) fn();
+}
+
+function confirmModalNo(){
+  document.getElementById('confirmModalOverlay').style.display = 'none';
+  pendingConfirmFn = null;
 }
 
 function toggleSidebarNav(){
@@ -873,11 +1123,11 @@ function closeSidebarNav(){
 }
 
 function showStep(step, skipHistory){
-  ['setup','scan','dashboard','admin','profile'].forEach(s => {
+  ['setup','scan','dashboard','admin','profile','compare'].forEach(s => {
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
   });
-  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', dashboard:'Overview', admin:'Users & Stores', profile:'My Account'};
+  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles'};
   const titleEl = document.getElementById('contentTitle');
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
   const labelEl = document.getElementById('sidebarCurrentPageLabel');
@@ -889,6 +1139,7 @@ function showStep(step, skipHistory){
   if(step==='dashboard'){ renderDashboard(); if(currentProfile && currentProfile.role === 'admin') startDashboardPolling(); }
   if(step==='admin') renderAdminPanel();
   if(step==='profile') renderProfilePanel();
+  if(step==='compare') renderCycleComparison();
 
   // Keep the URL in sync so the browser's own Back/Forward buttons work,
   // and a page can be reloaded/bookmarked directly to a specific section.
@@ -899,7 +1150,7 @@ function showStep(step, skipHistory){
   if(backBtn) backBtn.style.display = history.length > 1 ? '' : 'none';
 }
 
-const VALID_ROUTE_STEPS = ['setup','scan','dashboard','admin','profile'];
+const VALID_ROUTE_STEPS = ['setup','scan','dashboard','admin','profile','compare'];
 window.addEventListener('popstate', () => {
   const step = location.hash.replace('#','');
   if(VALID_ROUTE_STEPS.includes(step) && document.getElementById('appRoot').style.display !== 'none'){
@@ -908,14 +1159,56 @@ window.addEventListener('popstate', () => {
 });
 function goBack(){ history.back(); }
 
+// ---------------- REALTIME SYNC ----------------
+// Pushes live updates instantly when any auditor scans/locks/uploads,
+// instead of waiting for the next poll. A slow fallback poll stays on
+// as a safety net in case a websocket connection silently drops.
+let realtimeChannel = null;
+
+function subscribeToRealtimeUpdates(cycleId){
+  unsubscribeRealtime();
+  if(!sb || !cycleId) return;
+  realtimeChannel = sb.channel('cycle-' + cycleId)
+    .on('postgres_changes', { event:'*', schema:'public', table:'scans', filter:'cycle_id=eq.'+cycleId }, handleRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'store_locks', filter:'cycle_id=eq.'+cycleId }, handleRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'base_serials', filter:'cycle_id=eq.'+cycleId }, handleRealtimeChange)
+    .on('postgres_changes', { event:'UPDATE', schema:'public', table:'audit_cycles', filter:'id=eq.'+cycleId }, handleRealtimeChange)
+    .subscribe();
+}
+
+function unsubscribeRealtime(){
+  if(realtimeChannel && sb){ sb.removeChannel(realtimeChannel); realtimeChannel = null; }
+}
+
+let realtimeDebounceTimer = null;
+function handleRealtimeChange(){
+  // Debounce: a bulk upload or many quick scans fire many events at once —
+  // wait for things to settle for a moment before refreshing.
+  clearTimeout(realtimeDebounceTimer);
+  realtimeDebounceTimer = setTimeout(async () => {
+    if(!currentCycleId) return;
+    try{
+      await fetchCycleData();
+      const activeView = document.querySelector('.panel-view.active');
+      const activeId = activeView ? activeView.id : '';
+      if(activeId === 'view-dashboard') renderDashboard();
+      if(activeId === 'view-scan') renderScanView();
+    }catch(e){
+      console.error('Realtime refresh failed', e);
+    }
+  }, 600);
+}
+
 let dashboardPollTimer = null;
 function startDashboardPolling(){
   stopDashboardPolling();
+  // Realtime handles instant updates now — this is just a fallback in
+  // case a websocket connection silently drops on a flaky network.
   dashboardPollTimer = setInterval(async () => {
     if(!currentCycleId) return;
     try{ await fetchCycleData(); renderDashboard(); }
-    catch(e){ console.error('Live refresh failed', e); }
-  }, 15000);
+    catch(e){ console.error('Fallback refresh failed', e); }
+  }, 60000);
 }
 function stopDashboardPolling(){
   if(dashboardPollTimer){ clearInterval(dashboardPollTimer); dashboardPollTimer = null; }
@@ -984,14 +1277,32 @@ function handleScanUpload(event){
   if(!requireCycle()){ event.target.value=''; return; }
   const selectedStore = document.getElementById('scanStoreSelect').value;
   parseWorkbook(file, async (rows) => {
-    const parsed = [];
+    const parsedRaw = [];
     rows.forEach(r => {
       const storeFromFile = findStore(r);
       const serial = findSerial(r);
       const sku = findVal(r, SKU_ALIASES);
       if(!serial) return;
-      parsed.push({store: storeFromFile || selectedStore, sku, serial});
+      parsedRaw.push({store: storeFromFile || selectedStore, sku, serial});
     });
+
+    // Drop duplicates: against what's already scanned, and repeats within this file itself.
+    const existingKeys = new Set(scanData.map(r => r.store + '::' + normalizeSerial(r.serial)));
+    const seenInFile = new Set();
+    const parsed = [];
+    let duplicateCount = 0;
+    parsedRaw.forEach(r => {
+      const key = r.store + '::' + normalizeSerial(r.serial);
+      if(existingKeys.has(key) || seenInFile.has(key)){ duplicateCount++; return; }
+      seenInFile.add(key);
+      parsed.push(r);
+    });
+
+    if(!parsed.length){
+      showMessage(duplicateCount ? `All ${duplicateCount} serials in this file were already scanned — nothing new to add.` : 'No valid serials found in this file.', true);
+      return;
+    }
+
     try{
       const payload = parsed.map(r => ({cycle_id: currentCycleId, store_code: r.store, sku: r.sku, serial_no: r.serial, scanned_by: currentUser ? currentUser.id : null}));
       const chunkSize = 500;
@@ -1000,11 +1311,17 @@ function handleScanUpload(event){
         if(error) throw error;
       }
       await fetchCycleData();
-      showMessage(`Uploaded ${parsed.length} scanned serials.`);
+      showMessage(`Uploaded ${parsed.length} scanned serials.` + (duplicateCount ? ` Skipped ${duplicateCount} already-scanned duplicate${duplicateCount===1?'':'s'}.` : ''));
       renderScanView();
     }catch(e){
       console.error(e);
-      showMessage('Could not save scanned serials to Supabase: ' + errMsg(e), true);
+      if(e && e.code === '23505'){
+        showMessage('Some serials in this file were already scanned by someone else moments ago — please re-upload to pick up just the remaining new ones.', true);
+        await fetchCycleData();
+        renderScanView();
+      } else {
+        showMessage('Could not save scanned serials to Supabase: ' + errMsg(e), true);
+      }
     }
   });
   event.target.value = '';
@@ -1064,6 +1381,73 @@ function populateStoreSelect(){
   if(stores.includes(prev)) sel.value = prev;
 }
 
+// ---------------- OFFLINE-TOLERANT SCANNING ----------------
+// Scoped to manual single-serial scanning — the realistic case of an
+// auditor standing in a store with a flaky signal. Bulk Excel upload
+// still needs a live connection to read/save the file.
+const OFFLINE_QUEUE_KEY = 'pv-recon-offline-queue';
+
+function getOfflineQueue(){
+  try{ return JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]'); }
+  catch(e){ return []; }
+}
+function saveOfflineQueue(queue){
+  try{ localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue)); }catch(e){ console.error('Could not persist offline queue', e); }
+  updateOfflineBanner();
+}
+function queueOfflineScan(payload){
+  const queue = getOfflineQueue();
+  queue.push({ ...payload, _queuedAt: new Date().toISOString() });
+  saveOfflineQueue(queue);
+}
+
+let offlineSyncInProgress = false;
+async function syncOfflineQueue(){
+  if(offlineSyncInProgress || !navigator.onLine || !sb) return;
+  const queue = getOfflineQueue();
+  if(!queue.length) return;
+  offlineSyncInProgress = true;
+  updateOfflineBanner();
+  const stillQueued = [];
+  let syncedCount = 0;
+  for(const entry of queue){
+    const { _queuedAt, ...payload } = entry;
+    try{
+      const { error } = await sb.from('scans').insert(payload);
+      if(error && error.code !== '23505'){ stillQueued.push(entry); }
+      else { syncedCount++; }
+    }catch(e){
+      stillQueued.push(entry); // still offline or failed — keep it queued, try again next time
+    }
+  }
+  saveOfflineQueue(stillQueued);
+  offlineSyncInProgress = false;
+  if(syncedCount > 0){
+    showMessage(`✅ Synced ${syncedCount} offline scan${syncedCount===1?'':'s'}.`);
+    if(currentCycleId){ await fetchCycleData(); renderScanView(); }
+  }
+  updateOfflineBanner();
+}
+
+function updateOfflineBanner(){
+  const banner = document.getElementById('offlineBanner');
+  if(!banner) return;
+  const queue = getOfflineQueue();
+  const isOffline = !navigator.onLine;
+  if(isOffline){
+    banner.style.display = 'flex';
+    banner.textContent = `📴 You're offline — scans are being saved on this device${queue.length ? ` (${queue.length} queued)` : ''} and will sync automatically once you're back online.`;
+  } else if(queue.length){
+    banner.style.display = 'flex';
+    banner.textContent = offlineSyncInProgress ? `Syncing ${queue.length} queued scan${queue.length===1?'':'s'}…` : `${queue.length} scan${queue.length===1?'':'s'} waiting to sync…`;
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+window.addEventListener('online', syncOfflineQueue);
+window.addEventListener('offline', updateOfflineBanner);
+
 async function addScan(){
   const input = document.getElementById('scanInput');
   const serial = normalizeSerial(input.value.trim());
@@ -1071,17 +1455,58 @@ async function addScan(){
   if(!serial){ return; }
   if(!store){ showMessage('Select a store first.', true); return; }
   if(!requireCycle()) return;
+
+  const queue = getOfflineQueue();
+  const isDuplicate = scanData.some(r => r.store === store && normalizeSerial(r.serial) === serial)
+    || queue.some(q => q.store_code === store && normalizeSerial(q.serial_no) === serial);
+  if(isDuplicate){
+    showMessage(`⚠️ "${serial}" was already scanned for ${store} — not added again.`, true);
+    input.value = '';
+    input.focus();
+    return;
+  }
+
   const baseMatch = baseData.find(b => b.store === store && b.serial === serial);
+  const scanPayload = {
+    cycle_id: currentCycleId, store_code: store, sku: baseMatch ? baseMatch.sku : '', serial_no: serial, scanned_by: currentUser ? currentUser.id : null
+  };
+
+  if(!navigator.onLine){
+    queueOfflineScan(scanPayload);
+    input.value = '';
+    input.focus();
+    showMessage(`📴 Offline — "${serial}" saved on this device and will sync automatically once you're back online.`, true);
+    renderScanView();
+    return;
+  }
+
   try{
-    const { error } = await sb.from('scans').insert({
-      cycle_id: currentCycleId, store_code: store, sku: baseMatch ? baseMatch.sku : '', serial_no: serial, scanned_by: currentUser ? currentUser.id : null
-    });
-    if(error) throw error;
+    const { error } = await sb.from('scans').insert(scanPayload);
+    if(error){
+      if(error.code === '23505'){
+        showMessage(`⚠️ "${serial}" was already scanned for ${store} — not added again.`, true);
+        input.value = '';
+        await fetchCycleData();
+        renderScanView();
+        return;
+      }
+      throw error;
+    }
     input.value = '';
     await fetchCycleData();
     renderScanView();
   }catch(e){
     console.error(e);
+    // A network-level failure (not a real server error) — queue it
+    // instead of losing the scan, so a flaky connection doesn't cost data.
+    if(e instanceof TypeError || !navigator.onLine){
+      queueOfflineScan(scanPayload);
+      input.value = '';
+      input.focus();
+      showMessage(`📴 Connection issue — "${serial}" saved on this device and will sync automatically once you're back online.`, true);
+      renderScanView();
+      return;
+    }
     showMessage('Could not save this scan to Supabase: ' + errMsg(e), true);
   }
 }
@@ -1100,6 +1525,7 @@ async function removeScan(id){
 
 function renderScanView(){
   populateStoreSelect();
+  updateOfflineBanner();
   const store = document.getElementById('scanStoreSelect').value;
   const isAdmin = currentProfile && currentProfile.role === 'admin';
   const lock = store ? getStoreLock(store) : null;
@@ -1107,11 +1533,12 @@ function renderScanView(){
 
   const baseForStore = baseData.filter(b => b.store === store);
   const scansForStore = scanData.filter(r => r.store === store);
+  const queuedForStore = getOfflineQueue().filter(q => q.store_code === store);
 
   document.getElementById('scanProgress').innerHTML = store ? `
     <span>Expected here: <b>${baseForStore.length}</b></span>
-    <span>Scanned here: <b>${scansForStore.length}</b></span>
-    <span>Remaining: <b>${Math.max(baseForStore.length - scansForStore.length,0)}</b></span>` : '';
+    <span>Scanned here: <b>${scansForStore.length + queuedForStore.length}</b></span>
+    <span>Remaining: <b>${Math.max(baseForStore.length - scansForStore.length - queuedForStore.length,0)}</b></span>` : '';
 
   const lockBanner = document.getElementById('lockBanner');
   if(locked){
@@ -1140,9 +1567,14 @@ function renderScanView(){
   }
 
   const tbody = document.getElementById('scanTableBody');
-  if(!scansForStore.length){ tbody.innerHTML = '<tr><td colspan="4" class="empty-note">No serials scanned for this store yet.</td></tr>'; return; }
+  const queuedRows = queuedForStore.map(q => ({ serial: q.serial_no, sku: q.sku, ts: new Date(q._queuedAt).toLocaleString(), pending: true }));
+  const allRows = [...queuedRows, ...scansForStore.slice().reverse()];
+  if(!allRows.length){ tbody.innerHTML = '<tr><td colspan="4" class="empty-note">No serials scanned for this store yet.</td></tr>'; return; }
   const canDeleteAny = isAdmin;
-  tbody.innerHTML = scansForStore.slice().reverse().map(r => {
+  tbody.innerHTML = allRows.map(r => {
+    if(r.pending){
+      return `<tr style="opacity:0.7;"><td>${r.serial}</td><td>${r.sku||'—'}</td><td>${r.ts}</td><td><span class="badge badge-open" title="Saved on this device, will sync when back online">Pending sync</span></td></tr>`;
+    }
     const isMine = currentUser && r.scannedBy === currentUser.id;
     const canDelete = (canDeleteAny || isMine) && !(locked && !isAdmin);
     const delIcon = canDelete ? `<span style="color:var(--text-faint);cursor:pointer;" onclick="removeScan('${r.id}')">✕</span>` : '<span style="color:var(--text-faint);">—</span>';
@@ -1233,7 +1665,7 @@ function renderDashboard(){
     if(!currentCycleId){
       greetSub.textContent = "Load or create an audit cycle to get started.";
     } else if(!auditCompleted){
-      greetSub.textContent = `Live — ${auditedCount} store${auditedCount===1?'':'s'} scanned so far. Auto-refreshes every 15s.`;
+      greetSub.textContent = `Live — ${auditedCount} store${auditedCount===1?'':'s'} scanned so far. Updates instantly as auditors scan.`;
     } else {
       greetSub.textContent = `Audit "${document.getElementById('cycleName').value || 'Untitled cycle'}" completed — final results for ${auditedCount} store${auditedCount===1?'':'s'}.`;
     }
@@ -1553,6 +1985,8 @@ function downloadStoreExcel(store){
 
 function resetEverything(){
   confirmAction('reset-new-cycle', 'This disconnects from the current cycle so you can start a new one', () => {
+    unsubscribeRealtime();
+    stopDashboardPolling();
     currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
     baseData = []; scanData = []; detailResults = []; auditCompleted = false;
     document.getElementById('cycleName').value = '';
@@ -1692,3 +2126,7 @@ async function handleCompletePasswordReset(){
     msgEl.className = 'auth-message error';
   }
 }
+
+// Attempt to sync any scans queued from a previous offline session.
+updateOfflineBanner();
+if(navigator.onLine) syncOfflineQueue();

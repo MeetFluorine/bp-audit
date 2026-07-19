@@ -61,7 +61,8 @@ create table if not exists scans (
   sku text,
   serial_no text not null,
   scanned_by uuid references auth.users(id) on delete set null,
-  scanned_at timestamptz default now()
+  scanned_at timestamptz default now(),
+  unique (cycle_id, store_code, serial_no)
 );
 create index if not exists idx_scans_cycle_store on scans(cycle_id, store_code);
 create index if not exists idx_scans_serial on scans(serial_no);
@@ -147,6 +148,38 @@ returns boolean language sql security definer set search_path = public stable as
     select 1 from store_locks where cycle_id = target_cycle and store_code = target_store
   );
 $$;
+
+-- ------------------------------------------------------------
+-- 8b. CYCLE_STORE_SUMMARY — pre-aggregated match/short/excess per
+-- (cycle, store), used by the Compare Cycles page so it doesn't need
+-- to pull every raw serial across every cycle just to show a trend.
+-- Runs with the querying user's own permissions on the underlying
+-- tables, so RLS (store scoping etc.) applies automatically.
+-- ------------------------------------------------------------
+create or replace view cycle_store_summary as
+with base_matched as (
+  select b.cycle_id, b.store_code,
+    count(*) as expected_count,
+    count(*) filter (where s.id is not null) as matched_count
+  from base_serials b
+  left join scans s
+    on s.cycle_id = b.cycle_id and s.store_code = b.store_code and s.serial_no = b.serial_no
+  group by b.cycle_id, b.store_code
+),
+excess as (
+  select s.cycle_id, s.store_code, count(*) as excess_count
+  from scans s
+  left join base_serials b
+    on b.cycle_id = s.cycle_id and b.store_code = s.store_code and b.serial_no = s.serial_no
+  where b.id is null
+  group by s.cycle_id, s.store_code
+)
+select
+  bm.cycle_id, bm.store_code, bm.expected_count, bm.matched_count,
+  (bm.expected_count - bm.matched_count) as short_count,
+  coalesce(ex.excess_count, 0) as excess_count
+from base_matched bm
+left join excess ex on ex.cycle_id = bm.cycle_id and ex.store_code = bm.store_code;
 
 -- ------------------------------------------------------------
 -- 9. ROW LEVEL SECURITY — final policy set
@@ -247,6 +280,27 @@ create policy "users can update their own avatar" on storage.objects
   for update using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "users can delete their own avatar" on storage.objects
   for delete using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ============================================================
+-- 10b. REALTIME — lets connected auditors/admins see each other's
+-- scans, locks, and base data uploads instantly, without waiting on
+-- a poll interval.
+-- ============================================================
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='scans') then
+    alter publication supabase_realtime add table scans;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='store_locks') then
+    alter publication supabase_realtime add table store_locks;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='base_serials') then
+    alter publication supabase_realtime add table base_serials;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='audit_cycles') then
+    alter publication supabase_realtime add table audit_cycles;
+  end if;
+end $$;
 
 -- ============================================================
 -- 11. BOOTSTRAP YOUR FIRST ADMIN
