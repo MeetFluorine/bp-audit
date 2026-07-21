@@ -270,7 +270,6 @@
         </table>
       </div>
     </div>
-    <div class="footnote">Made by Chandan Yadav with ❤️</div>
   </div>
 
   <!-- STEP 2: SCAN -->
@@ -310,7 +309,6 @@
     <div class="btn-row">
       <button class="btn btn-primary" id="completeAuditBtn" onclick="completeAudit()">Complete audit &amp; build dashboard</button>
     </div>
-    <div class="footnote">Made by Chandan Yadav with ❤️</div>
   </div>
 
   <!-- STEP 3: DASHBOARD / OVERVIEW -->
@@ -407,7 +405,6 @@
       <button class="btn btn-primary" onclick="downloadExcel()">Download Excel report</button>
       <button class="btn btn-danger" onclick="resetEverything()">Start a new audit cycle</button>
     </div>
-    <div class="footnote">Made by Chandan Yadav with ❤️</div>
   </div>
 
   <!-- ADMIN -->
@@ -430,16 +427,24 @@
       <p class="hint">Check the stores each auditor should have access to. Unchecking removes their access to that store immediately.</p>
       <div class="bulk-action-bar" id="approvedBulkBar" style="display:none;">
         <span id="approvedSelectedCount">0 selected</span>
-        <select id="bulkAssignStoreSelect" style="max-width:180px;">
-          <option value="">Pick a store…</option>
-        </select>
+        <div class="store-multiselect-wrap">
+          <button class="btn" onclick="toggleBulkStorePicker()" id="bulkStorePickerBtn">Pick stores… <span id="bulkStoreCountBadge"></span></button>
+          <div class="store-multiselect-panel" id="bulkStorePickerPanel" style="display:none;">
+            <div class="circle-chip-row" id="circleChipRow"></div>
+            <div class="store-checkbox-grid" id="storeCheckboxGrid"></div>
+            <div class="store-multiselect-actions">
+              <span id="bulkStoreSelectedSummary">0 stores selected</span>
+              <button class="btn" onclick="clearBulkStoreSelection()">Clear</button>
+              <button class="btn btn-primary" onclick="toggleBulkStorePicker()">Done</button>
+            </div>
+          </div>
+        </div>
         <button class="btn btn-primary" onclick="bulkAssignStoreToSelected()">Assign to selected</button>
         <button class="btn" onclick="bulkUnassignStoreFromSelected()">Unassign from selected</button>
         <label style="display:flex;align-items:center;gap:6px;margin-left:auto;"><input type="checkbox" onchange="toggleApprovedSelectAll(this.checked)" id="approvedSelectAllInline">Select all</label>
       </div>
       <div id="approvedUsersList"></div>
     </div>
-    <div class="footnote">Made by Chandan Yadav with ❤️</div>
   </div>
 
   <!-- COMPARE CYCLES -->
@@ -468,7 +473,6 @@
         </table>
       </div>
     </div>
-    <div class="footnote">Made by Chandan Yadav with ❤️</div>
   </div>
 
   <!-- PROFILE -->

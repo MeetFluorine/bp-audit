@@ -5,6 +5,7 @@ let currentCycleCreatedAt = null;
 let baseData = [];
 let scanData = [];
 let storeLocks = [];
+let allStoreAssignments = [];
 let detailResults = [];
 let auditCompleted = false;
 let dashboardStoreFilter = null;
@@ -468,12 +469,6 @@ async function renderAdminPanel(){
     if(assignErr) throw assignErr;
 
     const storeCodes = Object.keys(STORE_MASTER).sort();
-    const bulkStoreSelect = document.getElementById('bulkAssignStoreSelect');
-    if(bulkStoreSelect && !bulkStoreSelect.dataset.populated){
-      bulkStoreSelect.innerHTML = '<option value="">Pick a store…</option>' + storeCodes.map(sc => `<option value="${sc}">${sc}</option>`).join('');
-      bulkStoreSelect.dataset.populated = '1';
-    }
-
     const listEl = document.getElementById('approvedUsersList');
     listEl.innerHTML = (approvedUsers || []).map(u => {
       const myStores = new Set((allAssignments||[]).filter(a=>a.user_id===u.id).map(a=>a.store_code));
@@ -634,17 +629,78 @@ function updateApprovedBulkBar(){
     selectAllBox.checked = allBoxes.length > 0 && selectedApprovedIds.size === allBoxes.length;
   }
 }
+let bulkSelectedStores = new Set();
+
+function toggleBulkStorePicker(){
+  const panel = document.getElementById('bulkStorePickerPanel');
+  const willOpen = panel.style.display === 'none' || !panel.style.display;
+  panel.style.display = willOpen ? 'block' : 'none';
+  if(willOpen) renderBulkStorePicker();
+}
+
+function renderBulkStorePicker(){
+  const byCircle = {};
+  Object.entries(STORE_MASTER).forEach(([store, circle]) => {
+    (byCircle[circle] = byCircle[circle] || []).push(store);
+  });
+  const circles = Object.keys(byCircle).sort();
+
+  document.getElementById('circleChipRow').innerHTML = circles.map(c => {
+    const allSelected = byCircle[c].every(s => bulkSelectedStores.has(s));
+    const someSelected = !allSelected && byCircle[c].some(s => bulkSelectedStores.has(s));
+    return `<span class="circle-chip ${allSelected?'active':''} ${someSelected?'partial':''}" onclick="toggleBulkCircle('${c}')" title="Click to ${allSelected?'deselect':'select'} all ${c} stores">${c}</span>`;
+  }).join('');
+
+  document.getElementById('storeCheckboxGrid').innerHTML = circles.map(c => `
+    <div class="store-checkbox-group">
+      <p class="store-checkbox-group-label">${c}</p>
+      ${byCircle[c].slice().sort().map(s => `
+        <label class="store-checkbox-item">
+          <input type="checkbox" ${bulkSelectedStores.has(s)?'checked':''} onchange="toggleBulkStoreCheckbox('${s}', this.checked)">
+          ${s}
+        </label>`).join('')}
+    </div>`).join('');
+
+  updateBulkStoreSummary();
+}
+
+function toggleBulkStoreCheckbox(store, checked){
+  if(checked) bulkSelectedStores.add(store); else bulkSelectedStores.delete(store);
+  renderBulkStorePicker();
+}
+
+function toggleBulkCircle(circle){
+  const stores = Object.entries(STORE_MASTER).filter(([s,c]) => c===circle).map(([s]) => s);
+  const allSelected = stores.every(s => bulkSelectedStores.has(s));
+  stores.forEach(s => allSelected ? bulkSelectedStores.delete(s) : bulkSelectedStores.add(s));
+  renderBulkStorePicker();
+}
+
+function clearBulkStoreSelection(){
+  bulkSelectedStores.clear();
+  renderBulkStorePicker();
+}
+
+function updateBulkStoreSummary(){
+  const n = bulkSelectedStores.size;
+  const summary = document.getElementById('bulkStoreSelectedSummary');
+  if(summary) summary.textContent = `${n} store${n===1?'':'s'} selected`;
+  const badge = document.getElementById('bulkStoreCountBadge');
+  if(badge) badge.textContent = n ? `(${n})` : '';
+}
+
 function bulkAssignStoreToSelected(){
-  const ids = [...selectedApprovedIds];
-  const store = document.getElementById('bulkAssignStoreSelect').value;
-  if(!ids.length){ showMessage('Select at least one user first.', true); return; }
-  if(!store){ showMessage('Pick a store to assign.', true); return; }
-  confirmAction('bulk-assign', `This assigns ${store} to ${ids.length} user${ids.length===1?'':'s'}`, async () => {
+  const userIds = [...selectedApprovedIds];
+  const stores = [...bulkSelectedStores];
+  if(!userIds.length){ showMessage('Select at least one user first.', true); return; }
+  if(!stores.length){ showMessage('Pick at least one store first.', true); return; }
+  confirmAction('bulk-assign', `This assigns ${stores.length} store${stores.length===1?'':'s'} to ${userIds.length} user${userIds.length===1?'':'s'}`, async () => {
     try{
-      const payload = ids.map(id => ({user_id:id, store_code:store}));
+      const payload = [];
+      userIds.forEach(uid => stores.forEach(sc => payload.push({user_id:uid, store_code:sc})));
       const { error } = await sb.from('user_stores').upsert(payload, { onConflict: 'user_id,store_code', ignoreDuplicates: true });
       if(error) throw error;
-      showMessage(`Assigned ${store} to ${ids.length} user${ids.length===1?'':'s'}.`);
+      showMessage(`Assigned ${stores.length} store${stores.length===1?'':'s'} to ${userIds.length} user${userIds.length===1?'':'s'}.`);
       renderAdminPanel();
     }catch(e){
       console.error(e);
@@ -653,15 +709,15 @@ function bulkAssignStoreToSelected(){
   });
 }
 function bulkUnassignStoreFromSelected(){
-  const ids = [...selectedApprovedIds];
-  const store = document.getElementById('bulkAssignStoreSelect').value;
-  if(!ids.length){ showMessage('Select at least one user first.', true); return; }
-  if(!store){ showMessage('Pick a store to unassign.', true); return; }
-  confirmAction('bulk-unassign', `This removes ${store} access from ${ids.length} user${ids.length===1?'':'s'}`, async () => {
+  const userIds = [...selectedApprovedIds];
+  const stores = [...bulkSelectedStores];
+  if(!userIds.length){ showMessage('Select at least one user first.', true); return; }
+  if(!stores.length){ showMessage('Pick at least one store first.', true); return; }
+  confirmAction('bulk-unassign', `This removes ${stores.length} store${stores.length===1?'':'s'} from ${userIds.length} user${userIds.length===1?'':'s'}`, async () => {
     try{
-      const { error } = await sb.from('user_stores').delete().in('user_id', ids).eq('store_code', store);
+      const { error } = await sb.from('user_stores').delete().in('user_id', userIds).in('store_code', stores);
       if(error) throw error;
-      showMessage(`Removed ${store} from ${ids.length} user${ids.length===1?'':'s'}.`);
+      showMessage(`Removed ${stores.length} store${stores.length===1?'':'s'} from ${userIds.length} user${userIds.length===1?'':'s'}.`);
       renderAdminPanel();
     }catch(e){
       console.error(e);
@@ -1064,6 +1120,12 @@ async function fetchCycleData(){
   const { data: lockRows, error: lockErr } = await sb.from('store_locks').select('*').eq('cycle_id', currentCycleId);
   if(lockErr) throw lockErr;
   storeLocks = (lockRows||[]).map(r => ({store:r.store_code, lockedBy:r.locked_by, lockedByEmail:r.locked_by_email, lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at}));
+
+  // For admins this is every assignment across every user (used to compute
+  // "how many of the stores actually being audited are done"); for a
+  // regular user, RLS restricts this to just their own rows anyway.
+  const { data: assignRows, error: assignErr2 } = await sb.from('user_stores').select('store_code, user_id');
+  if(!assignErr2) allStoreAssignments = assignRows || [];
 }
 
 function getStoreLock(store){
@@ -1698,10 +1760,18 @@ function renderDashboard(){
   }
 
   // ---- Sidebar audit-progress widget ----
-  const progressPct = totalBaseStores.length ? Math.round((storesRecorded/totalBaseStores.length)*100) : 0;
+  // Based on assignments + locks, NOT on whether base data/scans exist for
+  // a store — so a newly-assigned store or a genuine zero-stock store
+  // (locked with nothing to scan) is counted correctly either way.
+  const isAdminUser = currentProfile && currentProfile.role === 'admin';
+  const progressScopeStores = isAdminUser
+    ? [...new Set([...allStoreAssignments.map(a=>a.store_code), ...totalBaseStores])]
+    : myAssignedStores.slice();
+  const progressCompletedStores = progressScopeStores.filter(s => storeLocks.some(l => l.store === s));
+  const progressPct = progressScopeStores.length ? Math.round((progressCompletedStores.length/progressScopeStores.length)*100) : 0;
   const spPct = document.getElementById('sidebarProgressPct'); if(spPct) spPct.textContent = progressPct + '%';
   const spFill = document.getElementById('sidebarProgressFill'); if(spFill) spFill.style.width = progressPct + '%';
-  const spSub = document.getElementById('sidebarProgressSub'); if(spSub) spSub.textContent = `${storesRecorded} / ${totalBaseStores.length} stores completed`;
+  const spSub = document.getElementById('sidebarProgressSub'); if(spSub) spSub.textContent = `${progressCompletedStores.length} / ${progressScopeStores.length} stores completed`;
 
   // ---- Topbar notification badge (real count: stores still pending audit) ----
   const bellBadge = document.getElementById('topbarBellBadge');
