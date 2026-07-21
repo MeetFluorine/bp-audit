@@ -7,6 +7,7 @@ let scanData = [];
 let storeLocks = [];
 let allStoreAssignments = [];
 let detailResults = [];
+let reconciledStores = []; // every store that counts as "audited" for this cycle — scanned, locked, or declared zero-stock — even when it has 0 rows in detailResults
 let auditCompleted = false;
 let dashboardStoreFilter = null;
 
@@ -689,6 +690,17 @@ function updateBulkStoreSummary(){
   if(badge) badge.textContent = n ? `(${n})` : '';
 }
 
+// After a successful bulk assign/unassign: clear the user checkboxes and the store
+// picker's selections and close the picker, so the UI returns to its initial state
+// instead of leaving everything still checked.
+function resetBulkAssignmentUI(){
+  selectedApprovedIds.clear();
+  bulkSelectedStores.clear();
+  const panel = document.getElementById('bulkStorePickerPanel');
+  if(panel) panel.style.display = 'none';
+  updateBulkStoreSummary();
+}
+
 function bulkAssignStoreToSelected(){
   const userIds = [...selectedApprovedIds];
   const stores = [...bulkSelectedStores];
@@ -701,6 +713,7 @@ function bulkAssignStoreToSelected(){
       const { error } = await sb.from('user_stores').upsert(payload, { onConflict: 'user_id,store_code', ignoreDuplicates: true });
       if(error) throw error;
       showMessage(`Assigned ${stores.length} store${stores.length===1?'':'s'} to ${userIds.length} user${userIds.length===1?'':'s'}.`);
+      resetBulkAssignmentUI();
       renderAdminPanel();
     }catch(e){
       console.error(e);
@@ -718,6 +731,7 @@ function bulkUnassignStoreFromSelected(){
       const { error } = await sb.from('user_stores').delete().in('user_id', userIds).in('store_code', stores);
       if(error) throw error;
       showMessage(`Removed ${stores.length} store${stores.length===1?'':'s'} from ${userIds.length} user${userIds.length===1?'':'s'}.`);
+      resetBulkAssignmentUI();
       renderAdminPanel();
     }catch(e){
       console.error(e);
@@ -1088,7 +1102,7 @@ async function handleDeleteCycle(){
 
       if(currentCycleId === existing[0].id){
         currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
-        baseData = []; scanData = []; detailResults = []; auditCompleted = false;
+        baseData = []; scanData = []; detailResults = []; reconciledStores = []; auditCompleted = false;
         document.getElementById('cycleName').value = '';
         updateCycleLabels();
         renderBaseTable();
@@ -1304,12 +1318,22 @@ function handleBaseUpload(event){
   if(!file) return;
   if(!requireCycle()){ event.target.value=''; return; }
   parseWorkbook(file, async (rows) => {
-    const parsed = rows.map(r => ({
+    const parsedRaw = rows.map(r => ({
       store: findStore(r),
       sku: findVal(r, SKU_ALIASES),
       desc: findVal(r, DESC_ALIASES),
       serial: findSerial(r)
-    })).filter(r => r.store && r.serial);
+    })).filter(r => r.store); // keep store-only rows too — a blank serial with a store present declares "0 system stock" for that store
+
+    // A zero-stock declaration only needs one row per store; collapse repeats so
+    // we don't stack up empty-serial placeholder rows on every re-upload.
+    const seenZeroStockStore = new Set();
+    const parsed = parsedRaw.filter(r => {
+      if(r.serial) return true;
+      if(seenZeroStockStore.has(r.store)) return false;
+      seenZeroStockStore.add(r.store);
+      return true;
+    });
 
     document.getElementById('baseUploadStatus').textContent = `Uploading ${parsed.length} rows to Supabase…`;
     try{
@@ -1426,7 +1450,7 @@ function renderBaseTable(){
   document.getElementById('baseCount').textContent = baseData.length ? `(${baseData.length} serials)` : '';
   const tbody = document.getElementById('baseTableBody');
   if(!baseData.length){ tbody.innerHTML = '<tr><td colspan="3" class="empty-note">No base data loaded yet.</td></tr>'; return; }
-  tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku}</td><td>${r.serial}</td></tr>`).join('');
+  tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.serial || '<em>Zero stock declared</em>'}</td></tr>`).join('');
 }
 
 function populateStoreSelect(){
@@ -1702,9 +1726,16 @@ function completeAudit(){
 
 function reconcile(){
   detailResults = [];
-  const auditedStores = [...new Set(scanData.map(r=>r.store))].filter(Boolean).sort();
+  // A store counts as "audited" three ways: it has actual scans, it has been
+  // submitted & locked (even with nothing scanned — a genuine zero-stock store),
+  // or the base upload declared it with 0 system serials (store present, blank serial).
+  const scannedStores = [...new Set(scanData.map(r=>r.store))].filter(Boolean);
+  const lockedStores = [...new Set(storeLocks.map(l=>l.store))].filter(Boolean);
+  const zeroStockStores = [...new Set(baseData.filter(r => r.store && !r.serial).map(r=>r.store))];
+  const auditedStores = [...new Set([...scannedStores, ...lockedStores, ...zeroStockStores])].sort();
+  reconciledStores = auditedStores;
   auditedStores.forEach(store => {
-    const baseRows = baseData.filter(r => r.store === store);
+    const baseRows = baseData.filter(r => r.store === store && r.serial); // real serials only — blank-serial rows just flag a zero-stock store, not an actual unit
     const scanRows = scanData.filter(r => r.store === store);
     const scanSerials = new Set(scanRows.map(r => normalizeSerial(r.serial)));
     const baseSerials = new Set(baseRows.map(r => normalizeSerial(r.serial)));
@@ -1734,7 +1765,7 @@ function renderDashboard(){
   }
 
   const totalBaseStores = [...new Set(baseData.map(r=>r.store))].filter(Boolean);
-  const auditedStores = [...new Set(scanData.map(r=>r.store))].filter(Boolean);
+  const auditedStores = [...new Set([...scanData.map(r=>r.store), ...storeLocks.map(l=>l.store)])].filter(Boolean);
   const storesRecorded = auditedStores.length;
   const pendingStores = totalBaseStores.filter(s => !auditedStores.includes(s));
   const storesPending = pendingStores.length;
@@ -1781,7 +1812,10 @@ function renderDashboard(){
   }
 
   // ---- Per-store stats (used by hero sparklines, store filter, and the detail table's Match rate / Last scanned columns) ----
-  let stores = [...new Set(detailResults.map(r=>r.store))];
+  // Pull from reconciledStores (not just detailResults) so a locked or declared
+  // zero-stock store — one with nothing to match, nothing short, nothing excess —
+  // still shows up here instead of silently vanishing from the dashboard.
+  let stores = reconciledStores.slice();
   // Worst-variance-first so problem stores surface immediately, not buried alphabetically
   stores.sort((a,b) => {
     const va = detailResults.filter(r=>r.store===a && r.status!=='match').length;
@@ -1797,7 +1831,8 @@ function renderDashboard(){
     const t = rows.length;
     const storeScans = scanData.filter(r=>r.store===store);
     const lastTs = storeScans.reduce((latest,r) => (!latest || (r.rawTs && r.rawTs > latest)) ? (r.rawTs||latest) : latest, null);
-    storeStats[store] = { m, sh, ex, t, pct: t ? (m/t*100) : 0, lastTs, lastLabel: lastTs ? fmtRelativeTime(lastTs) : '—' };
+    // 0 expected + 0 found is a fully-reconciled zero-stock store, not a 0% failure — treat it as 100%.
+    storeStats[store] = { m, sh, ex, t, pct: t ? (m/t*100) : 100, lastTs, lastLabel: lastTs ? fmtRelativeTime(lastTs) : '—' };
   });
 
   // ---- Hero stat cards (Match Rate / Stock Scanned / Audit Pending / Total Variance), each with a real-data sparkline ----
@@ -1836,7 +1871,9 @@ function renderDashboard(){
   // ---- Store result cards ----
   document.getElementById('storeGrid').innerHTML = stores.length ? stores.map(store => {
     const {m, sh, ex, t, pct} = storeStats[store];
-    let stamp = sh>0 ? '<span class="stamp stamp-critical">Missing units</span>' : (ex>0 || m<t ? '<span class="stamp stamp-variance">Variance</span>' : '<span class="stamp stamp-match">Matched</span>');
+    let stamp = t===0 ? '<span class="stamp stamp-zero">Zero stock</span>'
+      : sh>0 ? '<span class="stamp stamp-critical">Missing units</span>'
+      : (ex>0 || m<t ? '<span class="stamp stamp-variance">Variance</span>' : '<span class="stamp stamp-match">Matched</span>');
     const isFiltered = dashboardStoreFilter === store;
     return `<div class="store-tag${isFiltered?' store-tag-selected':''}" onclick="setDashboardStoreFilter('${store.replace(/'/g,"\\'")}')" title="Click to filter the detail table below to this store">
       <span class="store-download" onclick="event.stopPropagation();downloadStoreExcel('${store.replace(/'/g,"\\'")}')" title="Download this store's report">↓ Export</span>
@@ -2017,16 +2054,17 @@ function buildDetailRowsForExcel(rows){
 }
 
 function downloadExcel(){
-  if(!detailResults.length){ showMessage('Complete the audit first to generate results.', true); return; }
+  if(!reconciledStores.length){ showMessage('Complete the audit first to generate results.', true); return; }
   const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
-  const stores = [...new Set(detailResults.map(r=>r.store))].sort();
+  const stores = reconciledStores.slice().sort();
 
   const summaryRows = stores.map(store => {
     const rows = detailResults.filter(r=>r.store===store);
     const m = rows.filter(r=>r.status==='match').length;
     const sh = rows.filter(r=>r.status==='short').length;
     const ex = rows.filter(r=>r.status==='excess').length;
-    return {Store:store, Circle:circleFor(store), 'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex, 'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '0.00'};
+    // 0 expected + 0 found is a genuine zero-stock store, fully reconciled — not a 0% failure.
+    return {Store:store, Circle:circleFor(store), 'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex, 'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00'};
   });
 
   const detailRows = detailResults.map((r,i) => ({
@@ -2045,7 +2083,7 @@ function downloadExcel(){
 
 function downloadStoreExcel(store){
   const rows = detailResults.filter(r => r.store === store);
-  if(!rows.length){ showMessage('No results for this store yet.', true); return; }
+  if(!rows.length && !reconciledStores.includes(store)){ showMessage('No results for this store yet.', true); return; }
   const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buildDetailRowsForExcel(rows)), 'Audit Report');
@@ -2058,7 +2096,7 @@ function resetEverything(){
     unsubscribeRealtime();
     stopDashboardPolling();
     currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
-    baseData = []; scanData = []; detailResults = []; auditCompleted = false;
+    baseData = []; scanData = []; detailResults = []; reconciledStores = []; auditCompleted = false;
     document.getElementById('cycleName').value = '';
     setSaveIndicator('session');
     updateCycleLabels();
