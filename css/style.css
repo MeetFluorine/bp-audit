@@ -455,16 +455,3 @@ body.role-admin .nav-group-label.admin-only{display:block;}
   .topbar-iconbtn{width:32px;height:32px;flex-shrink:0;}
 }
 
-.footnote {
-  margin-top: 32px;
-  padding-top: 20px;
-  border-top: 1px solid #e5e7eb;
-  text-align: center;
-  font-size: 13px;
-  color: #6b7280;
-  font-weight: 400;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
