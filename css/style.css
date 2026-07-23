@@ -34,6 +34,8 @@
   --font-display:'Poppins', sans-serif;
   --font-body:'Inter', sans-serif;
   --font-mono:'IBM Plex Mono', monospace;
+
+  --primary:var(--steel);
 }
 
 body.theme-dark{
@@ -343,6 +345,7 @@ tbody tr:hover{background:var(--panel-2);}
 .stamp-match{color:var(--green);background:var(--green-bg);}
 .stamp-variance{color:var(--amber);background:var(--amber-bg);}
 .stamp-critical{color:var(--red);background:var(--red-bg);}
+.stamp-zero{color:var(--blue);background:var(--blue-bg);}
 
 .charts-row{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:24px;}
 .chart-panel{background:var(--panel);border:1px solid var(--border);border-radius:18px;padding:18px 22px;box-shadow:var(--shadow-sm);}
