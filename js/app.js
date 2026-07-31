@@ -356,7 +356,7 @@ async function onLoginSuccess(knownUser){
 
     if(profile.role !== 'admin'){
       const { data: assigned } = await sb.from('user_stores').select('store_code').eq('user_id', user.id);
-      myAssignedStores = (assigned || []).map(r => r.store_code);
+      myAssignedStores = (assigned || []).map(r => normalizeStoreCode(r.store_code));
       const landing = (VALID_ROUTE_STEPS.includes(requestedStep) && !wantsAdminOnlyPage) ? requestedStep : 'scan';
       showStep(landing, true);
     } else {
@@ -385,19 +385,28 @@ async function renderCycleComparison(){
   try{
     const { data: cycles, error: cycErr } = await sb.from('audit_cycles').select('*').order('created_at', {ascending:true});
     if(cycErr) throw cycErr;
-    const { data: summary, error: sumErr } = await sb.from('cycle_store_summary').select('*');
-    if(sumErr) throw sumErr;
+    // Paginate: same 1000-row PostgREST default applies here, and this view
+    // grows by (cycles x stores), so it's just as likely to get truncated
+    // as base_serials/scans once there's enough history.
+    let summary = [], sumFrom = 0;
+    while(true){
+      const { data, error: sumErr } = await sb.from('cycle_store_summary').select('*').range(sumFrom, sumFrom + 999);
+      if(sumErr) throw sumErr;
+      summary = summary.concat(data || []);
+      if(!data || data.length < 1000) break;
+      sumFrom += 1000;
+    }
 
     // Populate the store filter dropdown once with whatever stores actually have data.
     const storeSelect = document.getElementById('compareStoreSelect');
     const prevSelected = storeSelect.value;
-    const distinctStores = [...new Set((summary||[]).map(r=>r.store_code))].sort();
+    const distinctStores = [...new Set((summary||[]).map(r=>normalizeStoreCode(r.store_code)))].sort();
     storeSelect.innerHTML = '<option value="">All stores (average)</option>' + distinctStores.map(s => `<option value="${s}">${s}</option>`).join('');
     if(distinctStores.includes(prevSelected)) storeSelect.value = prevSelected;
     const selectedStore = storeSelect.value;
 
     const rows = (cycles||[]).map(cycle => {
-      const cycleSummaryRows = (summary||[]).filter(r => r.cycle_id === cycle.id && (!selectedStore || r.store_code === selectedStore));
+      const cycleSummaryRows = (summary||[]).filter(r => r.cycle_id === cycle.id && (!selectedStore || normalizeStoreCode(r.store_code) === selectedStore));
       const expected = cycleSummaryRows.reduce((s,r)=>s+r.expected_count, 0);
       const matched = cycleSummaryRows.reduce((s,r)=>s+r.matched_count, 0);
       const short = cycleSummaryRows.reduce((s,r)=>s+r.short_count, 0);
@@ -472,7 +481,7 @@ async function renderAdminPanel(){
     const storeCodes = Object.keys(STORE_MASTER).sort();
     const listEl = document.getElementById('approvedUsersList');
     listEl.innerHTML = (approvedUsers || []).map(u => {
-      const myStores = new Set((allAssignments||[]).filter(a=>a.user_id===u.id).map(a=>a.store_code));
+      const myStores = new Set((allAssignments||[]).filter(a=>a.user_id===u.id).map(a=>normalizeStoreCode(a.store_code)));
       const chips = storeCodes.map(sc => `<span class="store-chip ${myStores.has(sc)?'active':''}" onclick="toggleStoreAssignment('${u.id}','${sc}',${myStores.has(sc)})">${sc}</span>`).join('');
       const avatarHtml = u.avatar_url ? `<img src="${u.avatar_url}" alt="" class="avatar-img">` : initialsFor(u.email, u.full_name);
       return `<div class="user-row">
@@ -1121,25 +1130,52 @@ async function handleDeleteCycle(){
   });
 }
 
+// Supabase/PostgREST caps any single select() response at 1000 rows by
+// default (api.max_rows). A .select('*') with no .range() silently
+// truncates once a cycle's total row count crosses that line — it does NOT
+// error out, so it's easy to miss. As more stores get uploaded into a
+// cycle, base_serials and scans are exactly the tables that grow past 1000,
+// so every fetch here must page through with .range() until a page comes
+// back short of the page size.
+async function fetchAllRows(table, cycleId){
+  const pageSize = 1000;
+  let from = 0;
+  let all = [];
+  while(true){
+    const { data, error } = await sb.from(table).select('*').eq('cycle_id', cycleId).range(from, from + pageSize - 1);
+    if(error) throw error;
+    all = all.concat(data || []);
+    if(!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 async function fetchCycleData(){
   if(!currentCycleId) return;
-  const { data: baseRows, error: baseErr } = await sb.from('base_serials').select('*').eq('cycle_id', currentCycleId);
-  if(baseErr) throw baseErr;
-  baseData = (baseRows||[]).map(r => ({store:r.store_code, sku:r.sku, desc:r.description, serial:r.serial_no, uploadedAt:r.uploaded_at}));
+  const baseRows = await fetchAllRows('base_serials', currentCycleId);
+  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, uploadedAt:r.uploaded_at}));
 
-  const { data: scanRows, error: scanErr } = await sb.from('scans').select('*').eq('cycle_id', currentCycleId);
-  if(scanErr) throw scanErr;
-  scanData = (scanRows||[]).map(r => ({id:r.id, store:r.store_code, sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), rawTs:r.scanned_at, scannedBy:r.scanned_by}));
+  const scanRows = await fetchAllRows('scans', currentCycleId);
+  scanData = (scanRows||[]).map(r => ({id:r.id, store:normalizeStoreCode(r.store_code), sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), rawTs:r.scanned_at, scannedBy:r.scanned_by}));
 
-  const { data: lockRows, error: lockErr } = await sb.from('store_locks').select('*').eq('cycle_id', currentCycleId);
-  if(lockErr) throw lockErr;
-  storeLocks = (lockRows||[]).map(r => ({store:r.store_code, lockedBy:r.locked_by, lockedByEmail:r.locked_by_email, lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at}));
+  const lockRows = await fetchAllRows('store_locks', currentCycleId);
+  storeLocks = (lockRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email, lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at}));
 
   // For admins this is every assignment across every user (used to compute
   // "how many of the stores actually being audited are done"); for a
   // regular user, RLS restricts this to just their own rows anyway.
-  const { data: assignRows, error: assignErr2 } = await sb.from('user_stores').select('store_code, user_id');
-  if(!assignErr2) allStoreAssignments = assignRows || [];
+  // This one isn't scoped to a cycle, so it stays a plain select — but it's
+  // paged too in case the org grows past 1000 user/store assignments.
+  let assignRows = [], assignFrom = 0;
+  while(true){
+    const { data, error } = await sb.from('user_stores').select('store_code, user_id').range(assignFrom, assignFrom + 999);
+    if(error) break;
+    assignRows = assignRows.concat(data || []);
+    if(!data || data.length < 1000) break;
+    assignFrom += 1000;
+  }
+  allStoreAssignments = assignRows;
 }
 
 function getStoreLock(store){
@@ -1817,7 +1853,7 @@ function renderDashboard(){
   // (locked with nothing to scan) is counted correctly either way.
   const isAdminUser = currentProfile && currentProfile.role === 'admin';
   const progressScopeStores = isAdminUser
-    ? [...new Set([...allStoreAssignments.map(a=>a.store_code), ...totalBaseStores])]
+    ? [...new Set([...allStoreAssignments.map(a=>normalizeStoreCode(a.store_code)), ...totalBaseStores])]
     : myAssignedStores.slice();
   const progressCompletedStores = progressScopeStores.filter(s => storeLocks.some(l => l.store === s));
   const progressPct = progressScopeStores.length ? Math.round((progressCompletedStores.length/progressScopeStores.length)*100) : 0;
