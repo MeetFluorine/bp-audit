@@ -1334,6 +1334,12 @@ function handleRealtimeChange(){
       const activeId = activeView ? activeView.id : '';
       if(activeId === 'view-dashboard') renderDashboard();
       if(activeId === 'view-scan') renderScanView();
+      if(activeId === 'view-setup') renderBaseTable();
+      // The missing-base-data bell badge depends on storeLocks + baseData,
+      // both of which can change from any screen (a store gets submitted
+      // while the admin is on Setup, base data gets uploaded while an
+      // auditor is scanning) — so it refreshes independent of which view is open.
+      refreshMissingBaseDataNotice();
     }catch(e){
       console.error('Realtime refresh failed', e);
     }
@@ -1396,6 +1402,12 @@ function handleBaseUpload(event){
       desc: findVal(r, DESC_ALIASES),
       serial: findSerial(r)
     })).filter(r => r.store); // keep store-only rows too — a blank serial with a store present declares "0 system stock" for that store
+
+    if(!parsedRaw.length && rows.length){
+      showMessage(`Couldn't find a store column in this file — none of its headers matched what the app recognizes (LocationCode, Store, Client, etc). Download the upload format below and match your columns to it.`, true);
+      event.target.value = '';
+      return;
+    }
 
     // A zero-stock declaration only needs one row per store (per source type); collapse
     // repeats so we don't stack up empty-serial placeholder rows on every re-upload.
@@ -1460,7 +1472,11 @@ function handleScanUpload(event){
     });
 
     if(!parsed.length){
-      showMessage(duplicateCount ? `All ${duplicateCount} serials in this file were already scanned — nothing new to add.` : 'No valid serials found in this file.', true);
+      if(!parsedRaw.length && rows.length){
+        showMessage(`Couldn't find a serial number column in this file — none of its headers matched what the app recognizes (Serial No, Serial Number, ItemSerialNo, IMEI, etc). Download the upload format below and match your columns to it.`, true);
+      } else {
+        showMessage(duplicateCount ? `All ${duplicateCount} serials in this file were already scanned — nothing new to add.` : 'No valid serials found in this file.', true);
+      }
       return;
     }
 
@@ -1526,8 +1542,115 @@ function renderBaseTable(){
   const grnCount = baseData.filter(r => r.sourceType === 'grn').length;
   document.getElementById('baseCount').textContent = baseData.length ? `(${baseData.length} serials — ${invCount} Inventory, ${grnCount} GRN pending)` : '';
   const tbody = document.getElementById('baseTableBody');
-  if(!baseData.length){ tbody.innerHTML = '<tr><td colspan="5" class="empty-note">No base data loaded yet.</td></tr>'; return; }
-  tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.serial || '<em>Zero stock declared</em>'}</td><td><span class="badge badge-${r.sourceType==='grn'?'excess':'match'}">${r.sourceType==='grn'?'GRN Pending':'Inventory'}</span></td></tr>`).join('');
+  if(!baseData.length){ tbody.innerHTML = '<tr><td colspan="5" class="empty-note">No base data loaded yet.</td></tr>'; }
+  else{
+    tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.serial || '<em>Zero stock declared</em>'}</td><td><span class="badge badge-${r.sourceType==='grn'?'excess':'match'}">${r.sourceType==='grn'?'GRN Pending':'Inventory'}</span></td></tr>`).join('');
+  }
+  refreshMissingBaseDataNotice();
+}
+
+// A store can be locked (audit submitted) while base_serials has zero rows
+// for it — nobody ever uploaded its Inventory or GRN data, or even declared
+// it as zero stock. That's a data-integrity gap, not a normal "0 expected /
+// 0 found" store, so it's tracked and surfaced separately from both.
+function computeMissingBaseDataStores(){
+  const storesWithBase = new Set(baseData.map(r => r.store));
+  return [...new Set(storeLocks.map(l => l.store))].filter(s => s && !storesWithBase.has(s)).sort();
+}
+
+function sanitizeStoreId(store){ return String(store).replace(/[^a-z0-9]/gi, '_'); }
+
+// Central refresh point for the "submitted but no base data" notification —
+// updates the topbar bell badge/dropdown and the Setup-page panel together so
+// they never drift out of sync. Safe to call whenever storeLocks or baseData
+// change, from any screen (guards on element existence for whichever isn't mounted).
+function refreshMissingBaseDataNotice(){
+  const missing = computeMissingBaseDataStores();
+
+  const bellBadge = document.getElementById('topbarBellBadge');
+  const bellBtn = document.getElementById('topbarBellBtn');
+  if(bellBadge){
+    if(missing.length > 0){ bellBadge.style.display = 'flex'; bellBadge.textContent = missing.length > 99 ? '99+' : missing.length; }
+    else{ bellBadge.style.display = 'none'; }
+  }
+  if(bellBtn) bellBtn.title = missing.length ? `${missing.length} store${missing.length===1?'':'s'} submitted with no base data set up` : 'Notifications';
+
+  const dropdownList = document.getElementById('notifDropdownList');
+  if(dropdownList){
+    dropdownList.innerHTML = missing.length
+      ? missing.map(s => `<div class="notif-item">
+          <div class="notif-item-body"><b>${s}</b><span>Circle ${circleFor(s)} · audit submitted, base data never set up</span></div>
+          <button class="btn" onclick="goFixMissingBaseData('${s.replace(/'/g,"\\'")}')">Fix in Setup</button>
+        </div>`).join('')
+      : '<div class="empty-note">No urgent items — every submitted store has base data on file.</div>';
+  }
+
+  const panel = document.getElementById('missingBaseDataPanel');
+  const list = document.getElementById('missingBaseDataList');
+  const countEl = document.getElementById('missingBaseDataCount');
+  if(panel && list){
+    panel.style.display = missing.length ? 'block' : 'none';
+    if(countEl) countEl.textContent = missing.length;
+    list.innerHTML = missing.map(s => `<div class="missing-base-row" id="missing-base-row-${sanitizeStoreId(s)}">
+        <div class="missing-base-row-info"><b>${s}</b><span>Circle ${circleFor(s)} · audit submitted, no Inventory or GRN data on file</span></div>
+        <div class="missing-base-row-actions">
+          <button class="btn" onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','inventory')">Declare 0 Inventory</button>
+          <button class="btn" onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','grn')">Declare 0 GRN Pending</button>
+        </div>
+      </div>`).join('');
+  }
+}
+
+function toggleNotifDropdown(){
+  const dd = document.getElementById('notifDropdown');
+  if(!dd) return;
+  dd.style.display = (dd.style.display === 'none' || !dd.style.display) ? 'block' : 'none';
+}
+function closeNotifDropdown(){
+  const dd = document.getElementById('notifDropdown');
+  if(dd) dd.style.display = 'none';
+}
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('notifDropdown');
+  const btn = document.getElementById('topbarBellBtn');
+  if(!dd || dd.style.display === 'none' || !dd.style.display) return;
+  if(dd.contains(e.target) || (btn && btn.contains(e.target))) return;
+  dd.style.display = 'none';
+});
+
+function goFixMissingBaseData(store){
+  closeNotifDropdown();
+  showStep('setup');
+  setTimeout(() => {
+    const panel = document.getElementById('missingBaseDataPanel');
+    if(panel) panel.scrollIntoView({behavior:'smooth', block:'start'});
+    const row = document.getElementById('missing-base-row-'+sanitizeStoreId(store));
+    if(row){ row.classList.add('missing-base-row-flash'); setTimeout(() => row.classList.remove('missing-base-row-flash'), 1800); }
+  }, 150);
+}
+
+// Lets an admin explicitly state "this store genuinely has 0 Inventory (or 0
+// GRN pending) stock" without needing to build a one-row spreadsheet just to
+// say so — same zero-declaration row shape handleBaseUpload already writes
+// when a file has a store with a blank serial.
+async function declareZeroStock(store, sourceType){
+  if(!requireCycle()) return;
+  try{
+    // serial_no is NOT NULL in the schema — a zero-stock row is declared with
+    // an empty string, exactly like handleBaseUpload already does for a
+    // store-only row with a blank serial cell. Every place that reads this
+    // back (renderBaseTable, reconcile, etc.) already treats a falsy serial
+    // ('' or null) as "zero stock declared" the same way, so this matches.
+    const { error } = await sb.from('base_serials').insert([{ cycle_id: currentCycleId, store_code: store, serial_no: '', source_type: sourceType }]);
+    if(error) throw error;
+    await fetchCycleData();
+    renderBaseTable();
+    populateStoreSelect();
+    showMessage(`Declared 0 ${sourceType==='grn' ? 'GRN pending' : 'Inventory'} stock for ${store}.`);
+  }catch(e){
+    console.error(e);
+    showMessage('Could not save: ' + errMsg(e), true);
+  }
 }
 
 function populateStoreSelect(){
@@ -1769,6 +1892,7 @@ async function unlockStore(store){
       await fetchCycleData();
       showMessage(`${store} has been unlocked.`);
       renderScanView();
+      refreshMissingBaseDataNotice();
     }catch(e){
       console.error(e);
       showMessage('Could not unlock store: ' + errMsg(e), true);
@@ -1794,6 +1918,7 @@ function completeAudit(){
         await fetchCycleData();
         showMessage(`${store} submitted and locked. Your admin will finalize the full audit once every store is done.`);
         renderScanView();
+        refreshMissingBaseDataNotice();
       }catch(e){
         console.error(e);
         showMessage('Could not submit this store: ' + errMsg(e), true);
@@ -2212,6 +2337,62 @@ function storeSourceSummary(store){
   const sh = rows.filter(r=>r.status==='short').length;
   const ex = rows.filter(r=>r.status==='excess').length;
   return { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex };
+}
+
+// Downloadable blank/example files matching exactly the column headers this
+// app recognizes — so a new user doesn't have to guess the "right" format
+// before their upload is accepted (LocationCode/ItemNo/SerialNo etc. are
+// picked up via header aliases, but nothing tells a first-time uploader that).
+function downloadBaseTemplate(){
+  const rows = [
+    ['LocationCode','ItemNo','SerialNo'],
+    ['SFXBEGUSARAI','STB-HD200','SN00000001'],
+    ['SFXBEGUSARAI','STB-HD200','SN00000002'],
+    ['SFXKANPUR','ONT-GX10','SN00000101'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:16},{wch:16},{wch:18}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Base Data');
+  const noteRows = [
+    ['Column', 'What to put here'],
+    ['LocationCode', 'Store code exactly as in the store master (e.g. SFXBEGUSARAI). "Store", "Client" or "Store Name" also work as the column name.'],
+    ['ItemNo', 'SKU / item code. Optional — leave blank if you don\'t track it, matching only needs the serial.'],
+    ['SerialNo', 'The unit serial to reconcile against physical scans. "Serial Number", "ItemSerialNo" or "IMEI" also work as column names.'],
+    ['', ''],
+    ['Uploading GRN Pending stock?', 'Same format — this app also recognizes GRN/ASN report headers directly: "Client" for store, "ItemNo" for SKU, "ItemSerialNo" or "BoxIDSerial" for serial. Just pick "GRN Stock (Pending Inward)" before uploading.'],
+    ['Zero-stock store', 'To declare a store as having ZERO stock (Inventory or GRN, whichever you\'re uploading), add one row with LocationCode filled in and SerialNo left blank.'],
+    ['', ''],
+    ['Before you upload', 'Delete the 3 example rows on the "Base Data" tab — they\'re only here to show the shape of the file.'],
+  ];
+  const noteWs = XLSX.utils.aoa_to_sheet(noteRows);
+  noteWs['!cols'] = [{wch:22},{wch:95}];
+  XLSX.utils.book_append_sheet(wb, noteWs, 'Read Me');
+  XLSX.writeFile(wb, 'Base_Data_Upload_Format.xlsx');
+}
+
+function downloadScanTemplate(){
+  const rows = [
+    ['SerialNo'],
+    ['SN00000001'],
+    ['SN00000002'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:18}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Scanned Serials');
+  const noteRows = [
+    ['Column', 'What to put here'],
+    ['SerialNo', 'One row per physically scanned unit. "Serial Number", "Serial No", "ItemSerialNo" or "IMEI" also work as column names.'],
+    ['LocationCode (optional)', 'Only needed if one file covers multiple stores. Left out, every row in the file is counted under whichever store is selected in the dropdown before you upload.'],
+    ['ItemNo (optional)', 'Item code / SKU, if you track it. Not required for matching.'],
+    ['', ''],
+    ['Before you upload', 'Delete the 2 example rows on the "Scanned Serials" tab — they\'re only here to show the shape of the file.'],
+  ];
+  const noteWs = XLSX.utils.aoa_to_sheet(noteRows);
+  noteWs['!cols'] = [{wch:24},{wch:95}];
+  XLSX.utils.book_append_sheet(wb, noteWs, 'Read Me');
+  XLSX.writeFile(wb, 'Scan_Upload_Format.xlsx');
 }
 
 function downloadExcel(){

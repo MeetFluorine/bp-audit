@@ -365,6 +365,22 @@ tbody tr:hover{background:var(--panel-2);}
 .pending-store-chip b{font-weight:700;}
 .pending-store-chip-circle{color:var(--text-faint);background:var(--panel);border:1px solid var(--border-soft);border-radius:10px;padding:1px 8px;font-size:10px;letter-spacing:0.4px;}
 .empty-note{color:var(--text-faint);font-size:12px;padding:20px;text-align:center;}
+
+.notif-dropdown{position:absolute;top:calc(100% + 10px);right:0;width:320px;max-height:360px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);z-index:200;text-align:left;cursor:default;}
+.notif-dropdown-header{font-family:var(--font-display);font-weight:700;font-size:12.5px;color:var(--text);padding:12px 14px;border-bottom:1px solid var(--border);}
+.notif-item{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border-soft);}
+.notif-item:last-child{border-bottom:none;}
+.notif-item-body{display:flex;flex-direction:column;gap:2px;font-size:11.5px;color:var(--text-dim);}
+.notif-item-body b{font-family:var(--font-mono);font-size:12.5px;color:var(--text);}
+.notif-item .btn{align-self:flex-start;font-size:11px;padding:6px 10px;}
+
+.missing-base-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);margin-bottom:10px;transition:box-shadow .2s,border-color .2s;}
+.missing-base-row:last-child{margin-bottom:0;}
+.missing-base-row-info{display:flex;flex-direction:column;gap:2px;font-size:11.5px;color:var(--text-dim);}
+.missing-base-row-info b{font-family:var(--font-mono);font-size:13px;color:var(--text);}
+.missing-base-row-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.missing-base-row-actions .btn{font-size:11.5px;padding:7px 11px;}
+.missing-base-row-flash{border-color:var(--amber);box-shadow:0 0 0 3px var(--amber-bg);}
 .status-strip{display:flex;justify-content:space-between;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px 18px;margin-bottom:18px;font-size:12.5px;color:var(--text-dim);box-shadow:var(--shadow-sm);}
 .status-strip.locked{border-color:var(--steel);background:var(--steel-bg);color:var(--text);}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);}
