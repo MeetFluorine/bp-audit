@@ -38,16 +38,33 @@ create table if not exists audit_cycles (
 
 -- ------------------------------------------------------------
 -- 3. BASE / SYSTEM DATA — the locked-in "expected" list per cycle
+--    source_type distinguishes two kinds of "expected" stock an
+--    admin can upload for the same store/cycle:
+--      'inventory' — already inward in the system (the original,
+--                    default behaviour).
+--      'grn'       — physically present at the store but still
+--                    pending GRN / inward (e.g. an ASN serial report
+--                    such as MultiUOMSerialReport, "GRN pending" stock).
+--    Both are reconciled against together as the store's complete
+--    expected quantity; the export breaks totals back out by source.
 -- ------------------------------------------------------------
 create table if not exists base_serials (
   id uuid primary key default gen_random_uuid(),
   cycle_id uuid references audit_cycles(id) on delete cascade,
   store_code text references stores(store_code) on update cascade,
+  sku text,
+  description text,
   serial_no text not null,
+  source_type text not null default 'inventory' check (source_type in ('inventory','grn')),
   uploaded_at timestamptz default now()
 );
+-- Defensive for pre-existing databases where this table was created before
+-- sku/description were tracked in this file (e.g. added ad-hoc in Studio).
+alter table base_serials add column if not exists sku text;
+alter table base_serials add column if not exists description text;
 create index if not exists idx_base_serials_cycle_store on base_serials(cycle_id, store_code);
 create index if not exists idx_base_serials_serial on base_serials(serial_no);
+create index if not exists idx_base_serials_cycle_store_source on base_serials(cycle_id, store_code, source_type);
 
 -- ------------------------------------------------------------
 -- 4. SCANS — every physical scan, tagged with store + auditor + time

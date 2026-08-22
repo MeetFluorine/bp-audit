@@ -247,7 +247,12 @@
   <div class="panel-view" id="view-setup">
     <div class="card">
       <h4>Upload base / system data</h4>
-      <p class="hint">Upload your base file as-is — it auto-detects <code>LocationCode</code> as store, <code>ItemNo</code> as SKU, and <code>SerialNo</code> (falling back to <code>IMEI</code> if blank) as the serial to reconcile against. Extra columns like Description, MRP, LotNo etc. are ignored. This is locked in as the "expected" list before scanning starts.</p>
+      <p class="hint">Upload your base file as-is — it auto-detects <code>LocationCode</code>/<code>Client</code> as store, <code>ItemNo</code> as SKU, and <code>SerialNo</code>/<code>ItemSerialNo</code> (falling back to <code>IMEI</code> if blank) as the serial to reconcile against. Extra columns like Description, MRP, LotNo etc. are ignored. This is locked in as part of the "expected" list before scanning starts.</p>
+      <p class="hint">Choose what this file represents before uploading. <b>Inventory Stock</b> is stock already inward in the system (the original base data). <b>GRN Stock (Pending Inward)</b> is stock that's physically at the store but hasn't been GRN'd/inward yet — e.g. an ASN serial report like MultiUOMSerialReport. Both are combined into the store's complete expected quantity that scans get reconciled against; the export breaks the totals back out by source.</p>
+      <div class="btn-row" id="baseDataTypeRow" role="radiogroup" aria-label="Base data type">
+        <label class="radio-pill"><input type="radio" name="baseDataType" value="inventory" checked> Inventory Stock</label>
+        <label class="radio-pill"><input type="radio" name="baseDataType" value="grn"> GRN Stock (Pending Inward)</label>
+      </div>
       <div class="upload-zone" id="baseUploadZone">
         <label class="upload-zone-trigger" for="baseFileInput">
           <span class="upload-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
@@ -265,7 +270,7 @@
       <h4>Base data loaded <span id="baseCount" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;"></span></h4>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Serial number</th></tr></thead>
+          <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Serial number</th><th>Type</th></tr></thead>
           <tbody id="baseTableBody"></tbody>
         </table>
       </div>
@@ -373,8 +378,22 @@
       </div>
     </div>
 
-    <h3 class="section-title" id="storeGridSection">Store results</h3>
+    <div class="section-header-row">
+      <h3 class="section-title" id="storeGridSection">Store results</h3>
+      <div class="section-header-actions">
+        <select id="storeCircleFilterSelect" onchange="setDashboardCircleFilter(this.value||null)" title="Filter store results by circle">
+          <option value="">All circles</option>
+        </select>
+        <button class="btn" id="pendingStoresToggleBtn" onclick="togglePendingStoresPanel()">⏳ Pending Stores (<span id="pendingStoresCount">0</span>)</button>
+      </div>
+    </div>
     <div class="tag-grid" id="storeGrid"></div>
+
+    <div class="card" id="pendingStoresPanel" style="display:none;">
+      <h4>Stores Pending Audit <span id="pendingStoresSub" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;"></span></h4>
+      <p class="hint">Every store in the master list that hasn't been submitted (locked) for the current cycle yet — not just how many are left, but which ones.</p>
+      <div class="pending-store-grid" id="pendingStoresGrid"></div>
+    </div>
 
     <h3 class="section-title">Match vs. variance by store</h3>
     <div class="charts-row">
@@ -398,7 +417,7 @@
     </div>
     <div class="table-wrap" style="max-height:420px;">
       <table>
-        <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Physical scan serial</th><th>System serial</th><th>Match rate</th><th>Status</th><th>Last scanned</th></tr></thead>
+        <thead><tr><th>Store</th><th>Circle</th><th>SKU</th><th>Physical scan serial</th><th>System serial</th><th>Source</th><th>Match rate</th><th>Status</th><th>Last scanned</th></tr></thead>
         <tbody id="detailTableBody"></tbody>
       </table>
     </div>

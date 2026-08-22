@@ -32,7 +32,23 @@ New sign-ups are **not** usable until an admin approves them from the Admin tab 
 5. Open `js/config.js` and replace `SUPABASE_URL` and `SUPABASE_ANON_KEY` with your own values.
 6. Go to **Authentication → URL Configuration** and add the exact URL you'll deploy this to (e.g. `https://yourname.github.io/reponame/`) under **Redirect URLs**. This is required for the "Forgot password" email link to work — Supabase rejects password-reset redirects to any URL that isn't on this allowlist.
 
-> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database, then do step 6 above if you haven't already (needed for the new Forgot Password feature).
+> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database (then step 6 above if you haven't already — needed for the new Forgot Password feature), and `supabase/add_grn_source_type.sql` once to add GRN-pending stock support (see below).
+
+## GRN pending stock (upload as of a store's complete expected quantity)
+
+Base/system data can now be uploaded as one of two source types, chosen with a radio toggle right above the upload box on the Setup Base Data screen:
+
+- **Inventory Stock** — stock already inward in the system. This is the original, only, upload type the app had before.
+- **GRN Stock (Pending Inward)** — stock that's physically present at the store but hasn't been GRN'd/inward into the system yet (e.g. an ASN serial report such as `MultiUOMSerialReport.xlsx`, where the `GRNNo` column is blank for units still pending). The app auto-detects that report's `Client`/`ItemNo`/`ItemSerialNo` columns the same way it detects `LocationCode`/`ItemNo`/`SerialNo` in a normal inventory file.
+
+Both types land in the same `base_serials` table (tagged with a `source_type` column) and are combined into that store's complete expected quantity — a physical scan is reconciled against Inventory + GRN together, so a unit that's physically on the shelf but only shows up in the GRN report no longer reads as a false "Excess."
+
+The Excel export (both the full audit export and each store's individual export) breaks the numbers back out by source:
+- **Summary** sheet gets `Inventory Expected/Matched/Short` and `GRN Pending Expected/Matched/Short` columns alongside the combined totals.
+- **Detail** sheet gets a `Source` column (`Inventory` / `GRN Pending`) per row.
+- A dedicated **GRN Pending** sheet lists every GRN-pending serial for the audited stores and whether it was matched in the physical scan or is still pending.
+
+If you already have a live Supabase project, run `supabase/add_grn_source_type.sql` once in the SQL Editor to add the `source_type` column (existing base data backfills as `inventory`, so nothing already uploaded changes behavior). Fresh projects get this column directly from `schema.sql`.
 
 > **Is it safe to commit the anon key to a public GitHub repo?** Yes — the anon/public key is specifically designed to be exposed in client-side code; that's its purpose. Real protection comes from the Row Level Security policies in `schema.sql`, not from hiding this key. Never put the **service_role** key anywhere in this project — it grants full admin access to your database and must never appear in browser-side code.
 
@@ -66,3 +82,4 @@ From here on, approve every other user directly from the **Admin** tab — no mo
 - **No true "delete account" from the app.** Deleting a user (as admin) or your own account (from the Profile tab) revokes all access immediately, but the underlying Supabase Auth login isn't removed — that requires the `service_role` key, which is never safe to use in browser code. If someone needs a full, clean wipe (e.g. to free up their email for reuse), remove them manually via Supabase's dashboard: **Authentication → Users**. A proper self-service full-delete would need a small server-side function (Supabase Edge Function) — not currently built, but straightforward to add later if needed.
 - **Supabase free tier** auto-pauses a project after 7 days of total inactivity (one-click resume, no data loss) and has no automated backups — export an Excel snapshot periodically as your own backup.
 - Serial number matching normalizes purely-numeric serials (strips leading zeros) but does not otherwise fuzzy-match; formatting differences beyond that (e.g. mixed case, extra punctuation) won't auto-reconcile.
+- When a base file has both a `BoxIDSerial` and an `ItemSerialNo` column (as GRN/ASN reports do), the app uses whichever one appears first left-to-right in the file — normally they're identical, but if a source file ever has them differ, only the first is used.

@@ -15,6 +15,28 @@ function setDashboardStoreFilter(store){
   dashboardStoreFilter = (dashboardStoreFilter === store) ? null : store;
   renderDashboard();
 }
+let dashboardCircleFilter = null;
+function setDashboardCircleFilter(circle){
+  dashboardCircleFilter = circle || null;
+  renderDashboard();
+}
+function togglePendingStoresPanel(){
+  const panel = document.getElementById('pendingStoresPanel');
+  const btn = document.getElementById('pendingStoresToggleBtn');
+  if(!panel) return;
+  const willShow = panel.style.display === 'none' || !panel.style.display;
+  panel.style.display = willShow ? 'block' : 'none';
+  if(btn) btn.classList.toggle('btn-primary', willShow);
+  if(willShow) panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+function showPendingStoresPanel(){
+  const panel = document.getElementById('pendingStoresPanel');
+  if(!panel) return;
+  panel.style.display = 'block';
+  const btn = document.getElementById('pendingStoresToggleBtn');
+  if(btn) btn.classList.add('btn-primary');
+  panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
 let storeChartInstance = null, varianceChartInstance = null;
 
 // ---------------- THEME (light / dark) ----------------
@@ -969,11 +991,17 @@ function handleDeleteOwnAccount(){
   });
 }
 
-const STORE_ALIASES = ['store','store name','storename','store id','storeid','locationcode','location code'];
+const STORE_ALIASES = ['store','store name','storename','store id','storeid','locationcode','location code','client'];
 const SKU_ALIASES = ['sku','item','item code','itemcode','material','material code','materialcode','itemno','item no','no2'];
-const SERIAL_ALIASES = ['serial','serial no','serial number','serialno','serial#','sr no','sr. no.'];
-const IMEI_ALIASES = ['imei'];
+const SERIAL_ALIASES = ['serial','serial no','serial number','serialno','serial#','sr no','sr. no.','itemserialno','item serial no','item serial number','boxidserial'];
+const IMEI_ALIASES = ['imei','imei1'];
 const DESC_ALIASES = ['description','desc'];
+// GRN pending source files (e.g. MultiUOMSerialReport) carry a GRN number
+// per row — populated once that unit has actually been GRN'd/inward, blank
+// while it's still pending. We don't currently gate on this at upload time
+// (the admin declares the whole file as GRN via the upload-type selector),
+// but the alias is kept here for findVal() lookups if that's needed later.
+const GRN_NO_ALIASES = ['grnno','grn no','grn number'];
 
 function errMsg(e){
   if(!e) return 'Unknown error';
@@ -1025,6 +1053,7 @@ async function connectToCycle(cycle){
   currentCycleCreatedAt = cycle.created_at || null;
   auditCompleted = !!cycle.completed;
   dashboardStoreFilter = null;
+  dashboardCircleFilter = null;
   updateCycleLabels();
   await fetchCycleData();
   renderBaseTable();
@@ -1154,7 +1183,7 @@ async function fetchAllRows(table, cycleId){
 async function fetchCycleData(){
   if(!currentCycleId) return;
   const baseRows = await fetchAllRows('base_serials', currentCycleId);
-  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, uploadedAt:r.uploaded_at}));
+  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, sourceType: r.source_type || 'inventory', uploadedAt:r.uploaded_at}));
 
   const scanRows = await fetchAllRows('scans', currentCycleId);
   scanData = (scanRows||[]).map(r => ({id:r.id, store:normalizeStoreCode(r.store_code), sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), rawTs:r.scanned_at, scannedBy:r.scanned_by}));
@@ -1349,10 +1378,17 @@ function parseWorkbook(file, callback){
   reader.readAsArrayBuffer(file);
 }
 
+function getSelectedBaseDataType(){
+  const checked = document.querySelector('input[name="baseDataType"]:checked');
+  return checked ? checked.value : 'inventory'; // default to the original behaviour if the control isn't present
+}
+
 function handleBaseUpload(event){
   const file = event.target.files[0];
   if(!file) return;
   if(!requireCycle()){ event.target.value=''; return; }
+  const sourceType = getSelectedBaseDataType(); // 'inventory' or 'grn' — which bucket this upload declares itself as
+  const sourceLabel = sourceType === 'grn' ? 'GRN pending' : 'Inventory';
   parseWorkbook(file, async (rows) => {
     const parsedRaw = rows.map(r => ({
       store: findStore(r),
@@ -1361,8 +1397,8 @@ function handleBaseUpload(event){
       serial: findSerial(r)
     })).filter(r => r.store); // keep store-only rows too — a blank serial with a store present declares "0 system stock" for that store
 
-    // A zero-stock declaration only needs one row per store; collapse repeats so
-    // we don't stack up empty-serial placeholder rows on every re-upload.
+    // A zero-stock declaration only needs one row per store (per source type); collapse
+    // repeats so we don't stack up empty-serial placeholder rows on every re-upload.
     const seenZeroStockStore = new Set();
     const parsed = parsedRaw.filter(r => {
       if(r.serial) return true;
@@ -1371,10 +1407,10 @@ function handleBaseUpload(event){
       return true;
     });
 
-    document.getElementById('baseUploadStatus').textContent = `Uploading ${parsed.length} rows to Supabase…`;
+    document.getElementById('baseUploadStatus').textContent = `Uploading ${parsed.length} ${sourceLabel} rows to Supabase…`;
     try{
       const payload = parsed.map(r => ({
-        cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial
+        cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial, source_type: sourceType
       }));
       const chunkSize = 500;
       for(let i=0; i<payload.length; i+=chunkSize){
@@ -1382,9 +1418,12 @@ function handleBaseUpload(event){
         if(error) throw error;
       }
       await fetchCycleData();
-      document.getElementById('baseUploadStatus').textContent = `Loaded ${baseData.length} rows from ${file.name} (saved to cycle "${currentCycleName}")`;
+      const invCount = baseData.filter(r=>r.sourceType!=='grn').length;
+      const grnCount = baseData.filter(r=>r.sourceType==='grn').length;
+      document.getElementById('baseUploadStatus').textContent = `Loaded ${parsed.length} ${sourceLabel} rows from ${file.name} (saved to cycle "${currentCycleName}"). Base data now totals ${baseData.length} rows — ${invCount} Inventory, ${grnCount} GRN pending.`;
       renderBaseTable();
       populateStoreSelect();
+      event.target.value = '';
     }catch(e){
       console.error(e);
       document.getElementById('baseUploadStatus').textContent = '';
@@ -1465,7 +1504,7 @@ async function loadSampleBaseData(){
     {store:'SFXVADODARA', sku:'ONT-GX10', desc:'Optical network terminal', serial:'SN-1003310'}
   ];
   try{
-    const payload = sample.map(r => ({cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial}));
+    const payload = sample.map(r => ({cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial, source_type: 'inventory'}));
     const { error } = await sb.from('base_serials').insert(payload);
     if(error) throw error;
     await fetchCycleData();
@@ -1483,10 +1522,12 @@ function clearBaseData(){
 }
 
 function renderBaseTable(){
-  document.getElementById('baseCount').textContent = baseData.length ? `(${baseData.length} serials)` : '';
+  const invCount = baseData.filter(r => r.sourceType !== 'grn').length;
+  const grnCount = baseData.filter(r => r.sourceType === 'grn').length;
+  document.getElementById('baseCount').textContent = baseData.length ? `(${baseData.length} serials — ${invCount} Inventory, ${grnCount} GRN pending)` : '';
   const tbody = document.getElementById('baseTableBody');
-  if(!baseData.length){ tbody.innerHTML = '<tr><td colspan="3" class="empty-note">No base data loaded yet.</td></tr>'; return; }
-  tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.serial || '<em>Zero stock declared</em>'}</td></tr>`).join('');
+  if(!baseData.length){ tbody.innerHTML = '<tr><td colspan="5" class="empty-note">No base data loaded yet.</td></tr>'; return; }
+  tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.serial || '<em>Zero stock declared</em>'}</td><td><span class="badge badge-${r.sourceType==='grn'?'excess':'match'}">${r.sourceType==='grn'?'GRN Pending':'Inventory'}</span></td></tr>`).join('');
 }
 
 function populateStoreSelect(){
@@ -1793,10 +1834,14 @@ function reconcile(){
     const baseSerials = new Set(baseRows.map(r => normalizeSerial(r.serial)));
     baseRows.forEach(r => {
       const matched = scanSerials.has(normalizeSerial(r.serial));
-      detailResults.push({store, sku:r.sku, systemSerial:r.serial, physicalSerial: matched ? r.serial : '', status: matched ? 'match' : 'short'});
+      // source: which upload this "expected" serial came from — Inventory
+      // (already inward) or GRN pending (physically present, pending inward).
+      // Scans are compared against inventory + GRN combined either way; this
+      // just tags the result so the export/dashboard can break it back out.
+      detailResults.push({store, sku:r.sku, systemSerial:r.serial, physicalSerial: matched ? r.serial : '', status: matched ? 'match' : 'short', source: r.sourceType === 'grn' ? 'grn' : 'inventory'});
     });
     scanRows.forEach(r => {
-      if(!baseSerials.has(normalizeSerial(r.serial))) detailResults.push({store, sku:r.sku, systemSerial:'', physicalSerial:r.serial, status:'excess'});
+      if(!baseSerials.has(normalizeSerial(r.serial))) detailResults.push({store, sku:r.sku, systemSerial:'', physicalSerial:r.serial, status:'excess', source:''});
     });
   });
 }
@@ -1886,10 +1931,17 @@ function renderDashboard(){
     const sh = rows.filter(r=>r.status==='short').length;
     const ex = rows.filter(r=>r.status==='excess').length;
     const t = rows.length;
+    // Break the expected side back out by where it came from — Inventory
+    // (already inward) vs GRN pending (physically present, pending inward).
+    const grnRows = rows.filter(r => r.source === 'grn');
+    const grnExpected = grnRows.length;
+    const grnMatched = grnRows.filter(r => r.status === 'match').length;
+    const invExpected = t - grnExpected;
+    const invMatched = m - grnMatched;
     const storeScans = scanData.filter(r=>r.store===store);
     const lastTs = storeScans.reduce((latest,r) => (!latest || (r.rawTs && r.rawTs > latest)) ? (r.rawTs||latest) : latest, null);
     // 0 expected + 0 found is a fully-reconciled zero-stock store, not a 0% failure — treat it as 100%.
-    storeStats[store] = { m, sh, ex, t, pct: t ? (m/t*100) : 100, lastTs, lastLabel: lastTs ? fmtRelativeTime(lastTs) : '—' };
+    storeStats[store] = { m, sh, ex, t, grnExpected, grnMatched, invExpected, invMatched, pct: t ? (m/t*100) : 100, lastTs, lastLabel: lastTs ? fmtRelativeTime(lastTs) : '—' };
   });
 
   // ---- Hero stat cards (Match Rate / Stock Scanned / Audit Pending / Total Variance), each with a real-data sparkline ----
@@ -1917,7 +1969,7 @@ function renderDashboard(){
       spark: sparklineBarsSVG(varianceTrend, cRed, true) }
   ];
   document.getElementById('kpiStrip').innerHTML = kpiCards.map(k => `
-    <div class="kpi ${k.cls}">
+    <div class="kpi ${k.cls}"${k.cls==='k-pending' ? ' onclick="showPendingStoresPanel()" style="cursor:pointer;" title="Click to see which stores are pending"' : ''}>
       <div class="kpi-top"><span class="kpi-icon">${k.icon}</span><span class="kpi-trend ${k.trend}">${k.trend==='up'?'\u2191':k.trend==='down'?'\u2193':'\u2192'} ${k.trendLabel}</span></div>
       <p class="kpi-value">${k.value}</p>
       <p class="kpi-label">${k.label}</p>
@@ -1926,20 +1978,47 @@ function renderDashboard(){
     </div>`).join('');
 
   // ---- Store result cards ----
-  document.getElementById('storeGrid').innerHTML = stores.length ? stores.map(store => {
-    const {m, sh, ex, t, pct} = storeStats[store];
+  // Circle filter scopes only this card grid — KPIs, the detail table, and
+  // storeStats itself stay computed across every reconciled store so a circle
+  // filter here never silently changes numbers shown elsewhere on the page.
+  const circleSelect = document.getElementById('storeCircleFilterSelect');
+  if(circleSelect){
+    const circles = [...new Set(Object.values(STORE_MASTER))].sort();
+    circleSelect.innerHTML = '<option value="">All circles</option>' + circles.map(c => `<option value="${c}"${dashboardCircleFilter===c?' selected':''}>${c}</option>`).join('');
+  }
+  const visibleStoreCards = dashboardCircleFilter ? stores.filter(s => circleFor(s) === dashboardCircleFilter) : stores;
+  document.getElementById('storeGrid').innerHTML = visibleStoreCards.length ? visibleStoreCards.map(store => {
+    const {m, sh, ex, t, pct, grnExpected, grnMatched} = storeStats[store];
     let stamp = t===0 ? '<span class="stamp stamp-zero">Zero stock</span>'
       : sh>0 ? '<span class="stamp stamp-critical">Missing units</span>'
       : (ex>0 || m<t ? '<span class="stamp stamp-variance">Variance</span>' : '<span class="stamp stamp-match">Matched</span>');
     const isFiltered = dashboardStoreFilter === store;
+    const grnNote = grnExpected ? ` · GRN pending ${grnMatched}/${grnExpected}` : '';
     return `<div class="store-tag${isFiltered?' store-tag-selected':''}" onclick="setDashboardStoreFilter('${store.replace(/'/g,"\\'")}')" title="Click to filter the detail table below to this store">
       <span class="store-download" onclick="event.stopPropagation();downloadStoreExcel('${store.replace(/'/g,"\\'")}')" title="Download this store's report">↓ Export</span>
       <div class="store-tag-body">
       <p class="store-tag-name">${store}</p>
-      <p class="store-tag-meta">Circle ${circleFor(store)} · Expected ${t-ex} · Found ${t-sh}</p>
+      <p class="store-tag-meta">Circle ${circleFor(store)} · Expected ${t-ex} · Found ${t-sh}${grnNote}</p>
       <div class="store-tag-stats"><span>Match <b>${pct.toFixed(2)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span></div>
       ${stamp}</div></div>`;
-  }).join('') : '<div class="empty-note">No stores scanned yet — complete at least one store in Scan / Upload to see results here.</div>';
+  }).join('') : `<div class="empty-note">${dashboardCircleFilter ? `No audited stores in ${dashboardCircleFilter} yet.` : 'No stores scanned yet — complete at least one store in Scan / Upload to see results here.'}</div>`;
+
+  // ---- Stores Pending Audit panel ----
+  // Every master-list store not yet locked/submitted — the flip side of the
+  // "Audit Pending" KPI count, so an admin can see exactly *which* stores,
+  // not just how many. Respects the same circle filter as the card grid above.
+  const filteredPendingStores = dashboardCircleFilter ? pendingStores.filter(s => circleFor(s) === dashboardCircleFilter) : pendingStores;
+  const pendingCountEl = document.getElementById('pendingStoresCount');
+  if(pendingCountEl) pendingCountEl.textContent = pendingStores.length;
+  const pendingSubEl = document.getElementById('pendingStoresSub');
+  if(pendingSubEl) pendingSubEl.textContent = dashboardCircleFilter ? `(${filteredPendingStores.length} of ${pendingStores.length} shown — filtered to ${dashboardCircleFilter})` : `(${pendingStores.length} store${pendingStores.length===1?'':'s'})`;
+  const pendingGridEl = document.getElementById('pendingStoresGrid');
+  if(pendingGridEl){
+    pendingGridEl.innerHTML = filteredPendingStores.length
+      ? filteredPendingStores.slice().sort((a,b) => circleFor(a).localeCompare(circleFor(b)) || a.localeCompare(b))
+          .map(s => `<span class="pending-store-chip" title="Not yet submitted for this cycle"><b>${s}</b><span class="pending-store-chip-circle">${circleFor(s)}</span></span>`).join('')
+      : `<div class="empty-note">${dashboardCircleFilter ? `No pending stores in ${dashboardCircleFilter}.` : 'No stores pending — every store has been submitted for this cycle.'}</div>`;
+  }
 
   // ---- Store filter dropdown (mirrors the store-card click filter) ----
   const filterSelect = document.getElementById('detailStoreFilterSelect');
@@ -1967,12 +2046,14 @@ function renderDashboard(){
   const detailBody = document.getElementById('detailTableBody');
   detailBody.innerHTML = searchedDetail.length ? searchedDetail.map(r => {
     const st = storeStats[r.store] || {pct:0, lastLabel:'—'};
+    const sourceLabel = r.source === 'grn' ? 'GRN Pending' : r.source === 'inventory' ? 'Inventory' : '—';
     return `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.physicalSerial||'—'}</td><td>${r.systemSerial||'—'}</td>
+    <td>${sourceLabel}</td>
     <td><div class="rate-cell"><div class="rate-track"><div class="rate-fill" style="width:${st.pct.toFixed(0)}%;background:${rateColor(st.pct)};"></div></div><span class="rate-text">${st.pct.toFixed(0)}%</span></div></td>
     <td><span class="badge badge-${r.status}">${r.status.charAt(0).toUpperCase()+r.status.slice(1)}</span></td>
     <td>${st.lastLabel}</td></tr>`;
   }).join('')
-    : '<tr><td colspan="8" class="empty-note">No matching records.</td></tr>';
+    : '<tr><td colspan="9" class="empty-note">No matching records.</td></tr>';
 
   renderCharts(stores, {match, short, excess, matchPct});
   buildLiveActivity(pendingStores, dashboardStoreFilter);
@@ -2098,16 +2179,39 @@ function buildLiveActivity(pendingStores, scopeStore){
     </div>`).join('');
 }
 
+function sourceLabelFor(r){
+  return r.source === 'grn' ? 'GRN Pending' : r.source === 'inventory' ? 'Inventory' : '—';
+}
+
 function buildDetailRowsForExcel(rows){
   return rows.map((r,i) => ({
     'Sr. No.': i+1,
     'System scan serial number': r.systemSerial || '',
     'SKU': r.sku || '',
     'Physical scan serial number': r.physicalSerial || '',
+    'Source': sourceLabelFor(r),
     'Match': r.status==='match' ? 'Match' : '',
     'Excess': r.status==='excess' ? 'Excess' : '',
     'Short': r.status==='short' ? 'Short' : ''
   }));
+}
+
+// Per-store rollup of expected/matched/short, split by where the "expected"
+// serial came from (Inventory already-inward vs GRN pending) as well as the
+// combined total — this is what "complete system" expected quantity means.
+function storeSourceSummary(store){
+  const rows = detailResults.filter(r=>r.store===store);
+  const grnRows = rows.filter(r => r.source === 'grn');
+  const invExpected = rows.filter(r => r.source === 'inventory').length;
+  const invMatched = rows.filter(r => r.source === 'inventory' && r.status==='match').length;
+  const invShort = rows.filter(r => r.source === 'inventory' && r.status==='short').length;
+  const grnExpected = grnRows.length;
+  const grnMatched = grnRows.filter(r => r.status==='match').length;
+  const grnShort = grnRows.filter(r => r.status==='short').length;
+  const m = rows.filter(r=>r.status==='match').length;
+  const sh = rows.filter(r=>r.status==='short').length;
+  const ex = rows.filter(r=>r.status==='excess').length;
+  return { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex };
 }
 
 function downloadExcel(){
@@ -2116,24 +2220,39 @@ function downloadExcel(){
   const stores = reconciledStores.slice().sort();
 
   const summaryRows = stores.map(store => {
-    const rows = detailResults.filter(r=>r.store===store);
-    const m = rows.filter(r=>r.status==='match').length;
-    const sh = rows.filter(r=>r.status==='short').length;
-    const ex = rows.filter(r=>r.status==='excess').length;
+    const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
     // 0 expected + 0 found is a genuine zero-stock store, fully reconciled — not a 0% failure.
-    return {Store:store, Circle:circleFor(store), 'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex, 'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00'};
+    return {
+      Store:store, Circle:circleFor(store),
+      'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
+      'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
+      'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex,
+      'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00'
+    };
   });
 
   const detailRows = detailResults.map((r,i) => ({
     'Sr. No.': i+1, Store:r.store, Circle:circleFor(r.store),
     'System scan serial number': r.systemSerial || '', SKU: r.sku || '', 'Physical scan serial number': r.physicalSerial || '',
+    'Source': sourceLabelFor(r),
     'Match': r.status==='match' ? 'Match' : '', 'Excess': r.status==='excess' ? 'Excess' : '', 'Short': r.status==='short' ? 'Short' : ''
   }));
   const scanLogRows = scanData.map(r => ({Store:r.store, Circle:circleFor(r.store), SKU:r.sku, 'Serial Number':r.serial, 'Scanned at':r.ts}));
 
+  // Dedicated sheet: every GRN-pending serial across the audited stores, and
+  // whether it was found in the physical scan or is still pending/short.
+  const grnRows = detailResults
+    .filter(r => r.source === 'grn')
+    .map((r,i) => ({
+      'Sr. No.': i+1, Store: r.store, Circle: circleFor(r.store), SKU: r.sku || '',
+      'GRN Pending Serial Number': r.systemSerial || '',
+      'Matched in Physical Scan': r.status === 'match' ? 'Yes' : 'No — still pending'
+    }));
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows), 'Detail');
+  if(grnRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(grnRows), 'GRN Pending');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(scanLogRows), 'Scan Log');
   XLSX.writeFile(wb, `PV_Recon_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
 }
@@ -2142,7 +2261,16 @@ function downloadStoreExcel(store){
   const rows = detailResults.filter(r => r.store === store);
   if(!rows.length && !reconciledStores.includes(store)){ showMessage('No results for this store yet.', true); return; }
   const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
+  const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
+  const summaryRows = [{
+    Store:store, Circle:circleFor(store),
+    'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
+    'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
+    'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex,
+    'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00'
+  }];
   const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buildDetailRowsForExcel(rows)), 'Audit Report');
   const safeStore = store.replace(/[^a-z0-9]/gi,'_');
   XLSX.writeFile(wb, `PV_Recon_${safeStore}_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
@@ -2154,6 +2282,7 @@ function resetEverything(){
     stopDashboardPolling();
     currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
     baseData = []; scanData = []; detailResults = []; reconciledStores = []; auditCompleted = false;
+    dashboardStoreFilter = null; dashboardCircleFilter = null;
     document.getElementById('cycleName').value = '';
     setSaveIndicator('session');
     updateCycleLabels();
@@ -2193,6 +2322,15 @@ renderBaseTable();
 populateStoreSelect();
 renderDashboard();
 wireDropzone('baseUploadZone', 'baseFileInput');
+
+// Visual selected-state for the Inventory/GRN pill radios (kept independent
+// of the CSS :has() selector so older browsers still show which is picked).
+(function wireBaseDataTypePills(){
+  const inputs = document.querySelectorAll('input[name="baseDataType"]');
+  const sync = () => inputs.forEach(i => i.closest('.radio-pill').classList.toggle('radio-pill-selected', i.checked));
+  inputs.forEach(i => i.addEventListener('change', sync));
+  sync();
+})();
 wireDropzone('scanUploadZone', 'scanFileInput');
 
 (async function initAuth(){
