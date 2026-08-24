@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -177,6 +176,13 @@
       </div>
 
       <p class="nav-group-label admin-only">Reports</p>
+      <div class="nav-item admin-only" id="tab-auditreport" onclick="showStep('auditreport')">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></span>
+        <span class="nav-text">
+          <span class="nav-label">Audit Report</span>
+          <span class="nav-sub">Every store, with the reviewer's remarks</span>
+        </span>
+      </div>
       <div class="nav-item admin-only" id="tab-compare" onclick="showStep('compare')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg></span>
         <span class="nav-text">
@@ -602,6 +608,37 @@
         <table>
           <thead><tr><th>Cycle</th><th>Status</th><th>Expected</th><th>Matched</th><th>Short</th><th>Excess</th><th>Match %</th></tr></thead>
           <tbody id="compareTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="footnote">Made by Chandan Yadav with ❤️</div>
+  </div>
+
+  <!-- AUDIT REPORT (admin) — every store's numbers plus what the reviewer
+       actually wrote when they approved/rejected it. -->
+  <div class="panel-view" id="view-auditreport">
+    <div class="card">
+      <div class="section-header-row">
+        <h3 class="section-title">Audit Report — every store this cycle</h3>
+        <button class="btn btn-primary" onclick="downloadAuditReportExcel()">⇩ Download Excel report</button>
+      </div>
+      <p class="hint">Match/short/excess numbers come from the reconciliation; Remarks, Reviewed By and Audited On come straight from whatever the Circle Head (or admin) wrote when they approved or rejected that store.</p>
+      <div class="detail-toolbar">
+        <input id="auditReportSearch" type="text" placeholder="Search store, circle, or remark…" oninput="renderAuditReportPage()">
+        <div class="detail-toolbar-left">
+          <select id="auditReportCircleFilter" onchange="renderAuditReportPage()"><option value="">All circles</option></select>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Store</th><th>Circle</th>
+            <th>Inv. Expected</th><th>Inv. Matched</th><th>Inv. Short</th>
+            <th>GRN Expected</th><th>GRN Matched</th><th>GRN Short</th>
+            <th>Total Expected</th><th>Total Found</th><th>Matched</th><th>Short</th><th>Excess</th><th>Match %</th>
+            <th>Status</th><th>Audited On</th><th>Reviewed By</th><th>Remarks</th>
+          </tr></thead>
+          <tbody id="auditReportBody"></tbody>
         </table>
       </div>
     </div>

@@ -45,7 +45,16 @@ begin
   end if;
 
   v_store := nullif(trim(new.raw_user_meta_data->>'requested_store'), '');
-  v_circles := new.raw_user_meta_data->'requested_circles';
+  -- IMPORTANT: '->' returns the JSON *value* for the key, and when the
+  -- client sends `requested_circles: null` (every non-circle-head signup,
+  -- including every auditor) that value is a JSON null literal — which is
+  -- NOT the same as SQL NULL. Left unguarded, `v_circles is not null` would
+  -- still be true for it, and jsonb_array_elements_text() on a JSON null
+  -- throws ("cannot extract elements from a scalar"), which is exactly what
+  -- was breaking every auditor sign-up ("Database error saving new user").
+  -- nullif(...,'null'::jsonb) collapses that JSON null down to a real SQL
+  -- NULL so every check below behaves correctly.
+  v_circles := nullif(new.raw_user_meta_data->'requested_circles', 'null'::jsonb);
 
   -- Auditor sign-up: find that store's circle, then that circle's
   -- circle head (if any) to route the approval to.
@@ -72,7 +81,18 @@ begin
   -- Pre-provision the requested access now, so approval (flipping
   -- `approved` to true) is the only remaining step — no separate
   -- manual store/circle assignment needed afterward.
-  if v_role = 'user' and v_store is not null then
+  --
+  -- Guarded with an existence check: user_stores.store_code has a foreign
+  -- key to stores(store_code), so if the live `stores` table is ever out of
+  -- sync with the store list the sign-up form shows (e.g. config.js was
+  -- updated with new stores but this table's seed insert wasn't re-run),
+  -- inserting an unrecognized code throws a foreign-key violation and
+  -- silently fails the WHOLE sign-up ("Database error saving new user") —
+  -- for every auditor, regardless of which store they picked. The account
+  -- itself should never be blocked by that; worst case here is just that
+  -- the store isn't auto-assigned, and whoever approves the request can
+  -- assign it manually from Admin -> Users & Stores.
+  if v_role = 'user' and v_store is not null and exists (select 1 from stores where store_code = v_store) then
     insert into user_stores (user_id, store_code) values (new.id, v_store)
       on conflict do nothing;
   elsif v_role = 'circle_head' and v_circles is not null then

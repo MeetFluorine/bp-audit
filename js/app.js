@@ -234,7 +234,7 @@ function bodyClassesForRole(role){
   if(role === 'admin' || role === 'circle_head') classes.push('cap-setup');
   if(role === 'admin' || role === 'circle_head') classes.push('cap-ops'); // operational tools: pending-stores panel, circle/circle-head rollup — not shown to a client
   if(role === 'circle_head') classes.push('cap-approve'); // approvals are circle-head-only now — admin reviews via export, not a dashboard panel
-  if(role === 'admin' || role === 'user') classes.push('cap-scan'); // scan/upload is admin + auditor only — a client (and circle head) never scans
+  if(role === 'admin' || role === 'user' || role === 'circle_head') classes.push('cap-scan'); // scan/upload: admin, auditor, and circle head (who may need to audit/backfill stores directly) — a client never scans
   if(role === 'user') classes.push('cap-mystores');
   if(role === 'client') classes.push('cap-client');
   return classes.join(' ');
@@ -480,8 +480,8 @@ async function onLoginSuccess(knownUser){
     // Which routes each role is allowed to land on directly (deep link or nav click).
     // Anything outside this list falls back to that role's default page.
     const allowedByRole = {
-      admin: ['setup','scan','dashboard','admin','profile','compare'],
-      circle_head: ['dashboard','setup','approvals','profile'],
+      admin: ['setup','scan','dashboard','admin','profile','compare','auditreport'],
+      circle_head: ['dashboard','setup','scan','approvals','profile'],
       client: ['dashboard','profile'],
       user: ['scan','mystores','profile']
     };
@@ -517,6 +517,73 @@ async function onLoginSuccess(knownUser){
 // ---------------- ADMIN PANEL ----------------
 // ---------------- COMPARE CYCLES ----------------
 let compareTrendChartInstance = null;
+
+// AUDIT REPORT — every store's numbers plus the reviewer's own remark from
+// store_locks (approval_remark), for the admin to see everything a circle
+// head wrote at approval time without opening each store individually.
+function renderAuditReportPage(){
+  if(!currentProfile || currentProfile.role !== 'admin') return;
+  reconcile();
+  const circleSel = document.getElementById('auditReportCircleFilter');
+  if(circleSel && circleSel.options.length <= 1){
+    const circles = [...new Set(Object.values(STORE_MASTER))].sort();
+    circleSel.innerHTML = '<option value="">All circles</option>' + circles.map(c => `<option value="${c}">${c}</option>`).join('');
+  }
+  const search = (document.getElementById('auditReportSearch')?.value || '').trim().toLowerCase();
+  const circleFilter = document.getElementById('auditReportCircleFilter')?.value || '';
+  const stores = Object.keys(STORE_MASTER).sort();
+  const rows = stores.map(store => {
+    const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
+    const approval = storeApprovalInfo(store);
+    return { store, circle: circleFor(store), invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex, approval };
+  }).filter(r => {
+    if(circleFilter && r.circle !== circleFilter) return false;
+    if(!search) return true;
+    return r.store.toLowerCase().includes(search) || r.circle.toLowerCase().includes(search) || (r.approval.remark||'').toLowerCase().includes(search);
+  });
+  const body = document.getElementById('auditReportBody');
+  if(!body) return;
+  body.innerHTML = rows.length ? rows.map(r => {
+    const pct = (r.m+r.sh+r.ex) ? ((r.m/(r.m+r.sh+r.ex))*100).toFixed(2) : '100.00';
+    const statusCls = r.approval.status === 'approved' ? 'stamp-match' : r.approval.status === 'rejected' ? 'stamp-critical' : r.approval.status === 'pending' ? 'stamp-variance' : 'stamp-zero';
+    return `<tr>
+      <td>${r.store}</td><td>${r.circle}</td>
+      <td>${r.invExpected}</td><td>${r.invMatched}</td><td>${r.invShort}</td>
+      <td>${r.grnExpected}</td><td>${r.grnMatched}</td><td>${r.grnShort}</td>
+      <td>${r.m+r.sh}</td><td>${r.m+r.ex}</td><td>${r.m}</td><td>${r.sh}</td><td>${r.ex}</td><td>${pct}%</td>
+      <td><span class="stamp ${statusCls}">${r.approval.status}</span></td>
+      <td>${r.approval.reviewedOn||'—'}</td><td>${r.approval.reviewedBy||'—'}</td>
+      <td style="max-width:260px;white-space:pre-wrap;">${r.approval.remark||''}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="18" class="empty-note">No stores match this search/filter.</td></tr>';
+}
+
+function downloadAuditReportExcel(){
+  if(!currentProfile || currentProfile.role !== 'admin') return;
+  reconcile();
+  const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
+  const stores = Object.keys(STORE_MASTER).sort();
+  const rows = stores.map(store => {
+    const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
+    const approval = storeApprovalInfo(store);
+    return {
+      Store: store, Circle: circleFor(store),
+      'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
+      'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
+      'Total Expected': m+sh, 'Total Found': m+ex, Matched: m, Short: sh, Excess: ex,
+      'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00',
+      'Review Status': approval.status,
+      'Audited On': approval.reviewedOn || '',
+      'Reviewed By': approval.reviewedBy || '',
+      Remarks: approval.remark
+    };
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  applyAutoFilter(ws, rows.length, 18);
+  XLSX.utils.book_append_sheet(wb, ws, 'Audit Report');
+  XLSX.writeFile(wb, `Audit_Report_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
+}
 
 async function renderCycleComparison(){
   if(!sb || !currentProfile || currentProfile.role !== 'admin') return;
@@ -598,13 +665,19 @@ async function renderCycleComparison(){
 async function renderAdminPanel(){
   if(!sb || !currentProfile || currentProfile.role !== 'admin') return;
   try{
-    const { data: pending, error: pendErr } = await sb.from('profiles').select('*').eq('approved', false).order('created_at', {ascending:true});
+    const { data: pendingRaw, error: pendErr } = await sb.from('profiles').select('*').eq('approved', false).order('created_at', {ascending:true});
     if(pendErr) throw pendErr;
+    // An auditor request that already has a Circle Head to review it is
+    // routed to them EXCLUSIVELY — it only shows up here as a fallback when
+    // that store's circle has no Circle Head yet. Every other pending
+    // request (admin/client/circle-head, and any auditor request with no
+    // Circle Head to catch it) still shows here as before.
+    const pending = (pendingRaw||[]).filter(p => !(p.role === 'user' && p.target_circle_head_id));
     const pendBody = document.getElementById('pendingUsersBody');
     const roleNamesForPending = {user:'Auditor', circle_head:'Circle Head', client:'Client', admin:'Admin'};
     pendBody.innerHTML = (pending && pending.length) ? pending.map(p => {
       const roleNote = p.role === 'user'
-        ? `Wants store <b>${p.requested_store||'—'}</b>${p.target_circle_head_id ? ' · routed to their Circle Head too' : ' · no Circle Head assigned yet, admin-only'}`
+        ? `Wants store <b>${p.requested_store||'—'}</b> · no Circle Head assigned to that circle yet, so it's fallen to you`
         : p.role === 'circle_head'
           ? `Wants circle(s) <b>${(p.requested_circles||[]).join(', ')||'—'}</b>`
           : '';
@@ -1358,8 +1431,8 @@ async function fetchCycleData(){
   storeLocks = (lockRows||[]).map(r => ({
     store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email,
     lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at,
-    approvalStatus: r.approval_status || 'pending', approvedByEmail: r.approved_by_email || null,
-    approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleString() : null, approvalRemark: r.approval_remark || ''
+    approvalStatus: r.approval_status || 'pending', approvedByEmail: r.approved_by_email || null, approvedByName: r.approved_by_name || null,
+    approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleString() : null, approvedAtRaw: r.approved_at || null, approvalRemark: r.approval_remark || ''
   }));
 
   // For admins this is every assignment across every user (used to compute
@@ -1449,11 +1522,11 @@ function closeSidebarNav(){
 }
 
 function showStep(step, skipHistory){
-  ['setup','scan','mystores','dashboard','admin','profile','compare','approvals'].forEach(s => {
+  ['setup','scan','mystores','dashboard','admin','profile','compare','approvals','auditreport'].forEach(s => {
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
   });
-  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', mystores:'My Stores', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles', approvals:'Approvals'};
+  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', mystores:'My Stores', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles', approvals:'Approvals', auditreport:'Audit Report'};
   const titleEl = document.getElementById('contentTitle');
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
   const labelEl = document.getElementById('sidebarCurrentPageLabel');
@@ -1469,6 +1542,7 @@ function showStep(step, skipHistory){
   if(step==='admin') renderAdminPanel();
   if(step==='profile') renderProfilePanel();
   if(step==='compare') renderCycleComparison();
+  if(step==='auditreport') renderAuditReportPage();
 
   // Keep the URL in sync so the browser's own Back/Forward buttons work,
   // and a page can be reloaded/bookmarked directly to a specific section.
@@ -1479,7 +1553,7 @@ function showStep(step, skipHistory){
   if(backBtn) backBtn.style.display = history.length > 1 ? '' : 'none';
 }
 
-const VALID_ROUTE_STEPS = ['setup','scan','mystores','dashboard','admin','profile','compare','approvals'];
+const VALID_ROUTE_STEPS = ['setup','scan','mystores','dashboard','admin','profile','compare','approvals','auditreport'];
 window.addEventListener('popstate', () => {
   const step = location.hash.replace('#','');
   if(VALID_ROUTE_STEPS.includes(step) && document.getElementById('appRoot').style.display !== 'none'){
@@ -1987,7 +2061,12 @@ async function declareZeroStock(store, sourceType){
 
 function populateStoreSelect(){
   let stores = [...new Set([...baseData.map(r=>r.store), ...scanData.map(r=>r.store)])].filter(Boolean).sort();
-  if(currentProfile && currentProfile.role !== 'admin'){
+  if(currentProfile && currentProfile.role === 'circle_head'){
+    // A circle head scanning/uploading directly isn't limited to stores
+    // that already have base data loaded — they need every store in their
+    // own circle(s) available, same set used everywhere else on their view.
+    stores = [...new Set(Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))))].sort();
+  } else if(currentProfile && currentProfile.role !== 'admin'){
     stores = myAssignedStores.slice().sort();
   }
   const sel = document.getElementById('scanStoreSelect');
@@ -2412,6 +2491,7 @@ async function submitApproval(store, status){
       approval_status: status,
       approved_by: currentUser ? currentUser.id : null,
       approved_by_email: currentUser ? currentUser.email : null,
+      approved_by_name: currentUser ? displayNameFor(currentUser.email, currentProfile && currentProfile.full_name) : null,
       approved_at: new Date().toISOString(),
       approval_remark: remark || null
     }).eq('cycle_id', currentCycleId).eq('store_code', store);
@@ -3085,6 +3165,27 @@ function storeSourceSummary(store){
   return { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex };
 }
 
+// The submitted-review side of a store — whatever the circle head (or
+// admin) actually wrote when they approved/rejected it, straight from
+// store_locks. This is the one place "when was it audited" and "what did
+// the reviewer say" live, so both the export and the on-screen Audit
+// Report page read it from here rather than re-deriving anything.
+function storeApprovalInfo(store){
+  const lock = storeLocks.find(l => l.store === store);
+  if(!lock) return { status:'not submitted', reviewedOn:'', reviewedBy:'', remark:'' };
+  // First name only — approvedByName is the reviewer's own display name
+  // (set at approval time); for a row approved before that column existed,
+  // fall back to deriving one from their email the same way the rest of
+  // the app does.
+  const fullDisplayName = displayNameFor(lock.approvedByEmail, lock.approvedByName);
+  return {
+    status: lock.approvalStatus || 'pending',
+    reviewedOn: lock.approvedAtRaw ? new Date(lock.approvedAtRaw).toLocaleDateString() : '',
+    reviewedBy: lock.approvedByEmail || lock.approvedByName ? (fullDisplayName.split(' ')[0] || fullDisplayName) : '',
+    remark: lock.approvalRemark || ''
+  };
+}
+
 // Downloadable blank/example files matching exactly the column headers this
 // app recognizes — so a new user doesn't have to guess the "right" format
 // before their upload is accepted (LocationCode/ItemNo/SerialNo etc. are
@@ -3158,6 +3259,7 @@ function downloadExcel(){
 
   const summaryRows = stores.map(store => {
     const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
+    const approval = storeApprovalInfo(store);
     // 0 expected + 0 found is a genuine zero-stock store, fully reconciled — not a 0% failure.
     return {
       Store:store, Circle:circleFor(store),
@@ -3165,7 +3267,10 @@ function downloadExcel(){
       'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
       'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex,
       'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00',
-      Remarks: '' // left blank on purpose — for the admin/reviewer to fill in after reviewing the numbers
+      'Audited On': approval.reviewedOn || '', // when the circle head/admin approved or rejected this store — the audit-trail date
+      'Reviewed By': approval.reviewedBy || '',
+      'Review Status': approval.status,
+      Remarks: approval.remark // whatever the reviewer actually wrote at approval time
     };
   });
 
@@ -3213,22 +3318,30 @@ function downloadStoreExcel(store){
   if(!rows.length && !reconciledStores.includes(store)){ showMessage('No results for this store yet.', true); return; }
   const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
   const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
+  const approval = storeApprovalInfo(store);
   const summaryRows = [{
     Store:store, Circle:circleFor(store),
     'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
     'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
     'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex,
     'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00',
-    Remarks: ''
+    'Audited On': approval.reviewedOn || '',
+    'Reviewed By': approval.reviewedBy || '',
+    'Review Status': approval.status,
+    Remarks: approval.remark
   }];
+  const scanLogRows = scanData.filter(r => r.store === store).map(r => ({Store:r.store, Circle:circleFor(r.store), SKU:r.sku, 'Serial Number':r.serial, 'Scanned at':r.ts}));
   const detailRows = buildDetailRowsForExcel(rows);
   const wb = XLSX.utils.book_new();
   const summaryWs = XLSX.utils.json_to_sheet(summaryRows);
-  applyAutoFilter(summaryWs, summaryRows.length, 15);
+  applyAutoFilter(summaryWs, summaryRows.length, 18);
   XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
   const detailWs = XLSX.utils.json_to_sheet(detailRows);
   applyAutoFilter(detailWs, detailRows.length, 9);
   XLSX.utils.book_append_sheet(wb, detailWs, 'Audit Report');
+  const logWs = XLSX.utils.json_to_sheet(scanLogRows);
+  applyAutoFilter(logWs, scanLogRows.length, 5);
+  XLSX.utils.book_append_sheet(wb, logWs, 'Scan Log');
   const safeStore = store.replace(/[^a-z0-9]/gi,'_');
   XLSX.writeFile(wb, `PV_Recon_${safeStore}_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
 }
