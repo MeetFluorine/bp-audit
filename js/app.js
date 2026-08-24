@@ -234,6 +234,7 @@ function bodyClassesForRole(role){
   if(role === 'admin' || role === 'circle_head') classes.push('cap-setup');
   if(role === 'admin' || role === 'circle_head') classes.push('cap-ops'); // operational tools: pending-stores panel, circle/circle-head rollup — not shown to a client
   if(role === 'circle_head') classes.push('cap-approve'); // approvals are circle-head-only now — admin reviews via export, not a dashboard panel
+  if(role === 'admin' || role === 'user') classes.push('cap-scan'); // scan/upload is admin + auditor only — a client (and circle head) never scans
   if(role === 'user') classes.push('cap-mystores');
   if(role === 'client') classes.push('cap-client');
   return classes.join(' ');
@@ -255,6 +256,8 @@ function togglePasswordVisibility(inputId, btn){
   btn.setAttribute('title', showing ? 'Show password' : 'Hide password');
 }
 
+let authSelectedCircles = new Set();
+
 function switchAuthMode(mode){
   authMode = mode;
   document.getElementById('authTabSignin').classList.toggle('active', mode==='signin');
@@ -262,8 +265,53 @@ function switchAuthMode(mode){
   document.getElementById('authSubmitBtn').textContent = mode==='signin' ? 'Sign in' : 'Create account';
   document.getElementById('authMessage').textContent = '';
   document.getElementById('authNameField').style.display = mode==='signup' ? '' : 'none';
+  const roleField = document.getElementById('authRoleField');
+  if(roleField) roleField.style.display = mode==='signup' ? '' : 'none';
+  if(mode==='signup'){
+    document.getElementById('authRole').value = 'user';
+    handleAuthRoleChange();
+  } else {
+    const storeField = document.getElementById('authStoreField'); if(storeField) storeField.style.display = 'none';
+    const circlesField = document.getElementById('authCirclesField'); if(circlesField) circlesField.style.display = 'none';
+  }
   const forgotLink = document.getElementById('forgotPasswordLink');
   if(forgotLink) forgotLink.style.display = mode==='signin' ? '' : 'none';
+}
+
+// Shows the right extra field for the chosen sign-up role — the store
+// picker for an auditor, the circle picker for a circle head. Who actually
+// approves the request is explained in the success popup after they submit,
+// not cluttered into the form itself.
+function handleAuthRoleChange(){
+  const role = document.getElementById('authRole').value;
+  const storeField = document.getElementById('authStoreField');
+  const circlesField = document.getElementById('authCirclesField');
+  if(storeField) storeField.style.display = role === 'user' ? '' : 'none';
+  if(circlesField) circlesField.style.display = role === 'circle_head' ? '' : 'none';
+  if(role === 'user'){
+    populateAuthStoreSelect();
+  } else if(role === 'circle_head'){
+    populateAuthCirclesChips();
+  }
+}
+
+function populateAuthStoreSelect(){
+  const sel = document.getElementById('authStore');
+  if(!sel || sel.options.length) return; // populate once
+  const stores = Object.keys(STORE_MASTER).sort();
+  sel.innerHTML = stores.map(s => `<option value="${s}">${s} (${circleFor(s)})</option>`).join('');
+}
+
+function populateAuthCirclesChips(){
+  const wrap = document.getElementById('authCirclesChips');
+  if(!wrap || wrap.childElementCount) return; // populate once
+  const circles = [...new Set(Object.values(STORE_MASTER))].sort();
+  wrap.innerHTML = circles.map(c => `<span class="store-chip" onclick="toggleAuthCircle('${c}', this)">${c}</span>`).join('');
+}
+
+function toggleAuthCircle(circle, el){
+  if(authSelectedCircles.has(circle)){ authSelectedCircles.delete(circle); el.classList.remove('active'); }
+  else { authSelectedCircles.add(circle); el.classList.add('active'); }
 }
 
 function setAuthMessage(text, isError){
@@ -280,17 +328,36 @@ async function handleAuthSubmit(){
   if(!email || !password){ setAuthMessage('Enter both email and password.', true); return; }
   if(authMode === 'signup' && !fullName){ setAuthMessage('Enter your full name.', true); return; }
 
+  let requestedRole = 'user', requestedStore = null, requestedCircles = null;
+  if(authMode === 'signup'){
+    requestedRole = document.getElementById('authRole').value;
+    if(requestedRole === 'user'){
+      requestedStore = document.getElementById('authStore').value;
+      if(!requestedStore){ setAuthMessage('Select which store you\'ll be auditing.', true); return; }
+    } else if(requestedRole === 'circle_head'){
+      requestedCircles = [...authSelectedCircles];
+      if(!requestedCircles.length){ setAuthMessage('Select at least one circle.', true); return; }
+    }
+  }
+
   setAuthMessage(authMode==='signin' ? 'Signing in…' : 'Creating account…', false);
   try{
     if(authMode === 'signup'){
-      const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
+      const { data, error } = await sb.auth.signUp({ email, password, options: { data: {
+        full_name: fullName, requested_role: requestedRole, requested_store: requestedStore, requested_circles: requestedCircles
+      } } });
       if(error) throw error;
       // Belt-and-suspenders: also write the name directly in case the
       // signup trigger runs before the session is fully established.
       if(data && data.user){
         await sb.from('profiles').update({ full_name: fullName }).eq('id', data.user.id);
       }
-      setAuthMessage('Account created. Waiting for admin approval — you can sign in once approved.', false);
+      const approverNote = requestedRole === 'user'
+        ? 'Your request has been sent to that store\'s Circle Head for approval — an admin can also approve it if that store doesn\'t have a Circle Head yet. You can sign in once approved.'
+        : 'Your request has been sent to an admin for approval. You can sign in once approved.';
+      setAuthMessage('', false);
+      openSignupSuccessModal(approverNote);
+      authSelectedCircles = new Set();
     } else {
       const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if(error) throw error;
@@ -534,10 +601,18 @@ async function renderAdminPanel(){
     const { data: pending, error: pendErr } = await sb.from('profiles').select('*').eq('approved', false).order('created_at', {ascending:true});
     if(pendErr) throw pendErr;
     const pendBody = document.getElementById('pendingUsersBody');
-    pendBody.innerHTML = (pending && pending.length) ? pending.map(p => `
+    const roleNamesForPending = {user:'Auditor', circle_head:'Circle Head', client:'Client', admin:'Admin'};
+    pendBody.innerHTML = (pending && pending.length) ? pending.map(p => {
+      const roleNote = p.role === 'user'
+        ? `Wants store <b>${p.requested_store||'—'}</b>${p.target_circle_head_id ? ' · routed to their Circle Head too' : ' · no Circle Head assigned yet, admin-only'}`
+        : p.role === 'circle_head'
+          ? `Wants circle(s) <b>${(p.requested_circles||[]).join(', ')||'—'}</b>`
+          : '';
+      return `
       <tr><td><input type="checkbox" class="pending-select-box" data-id="${p.id}" ${selectedPendingIds.has(p.id)?'checked':''} onchange="togglePendingSelect('${p.id}', this.checked)"></td>
-      <td>${displayNameFor(p.email, p.full_name)}<br><span style="color:var(--text-faint);font-size:11px;">${p.email}</span></td><td>${new Date(p.created_at).toLocaleDateString()}</td>
-      <td><div class="btn-row"><button class="btn btn-primary" onclick="approveUser('${p.id}')">Approve</button><button class="btn btn-danger" onclick="adminDeleteUser('${p.id}','${p.email.replace(/'/g,"\\'")}')">Reject</button></div></td></tr>`).join('')
+      <td>${displayNameFor(p.email, p.full_name)}<br><span style="color:var(--text-faint);font-size:11px;">${p.email}</span><br><span class="role-pill ${p.role}" style="margin-top:4px;display:inline-block;">${roleNamesForPending[p.role]||p.role}</span>${roleNote?`<br><span style="color:var(--text-faint);font-size:11px;">${roleNote}</span>`:''}</td><td>${new Date(p.created_at).toLocaleDateString()}</td>
+      <td><div class="btn-row"><button class="btn btn-primary" onclick="approveUser('${p.id}')">Approve</button><button class="btn btn-danger" onclick="adminDeleteUser('${p.id}','${p.email.replace(/'/g,"\\'")}')">Reject</button></div></td></tr>`;
+    }).join('')
       : '<tr><td colspan="4" class="empty-note">No pending sign-ups.</td></tr>';
     // Drop selections for anyone no longer pending (e.g. already approved elsewhere).
     const pendingIdsNow = new Set((pending||[]).map(p=>p.id));
@@ -1348,6 +1423,16 @@ function confirmModalNo(){
   if(cancelFn) cancelFn();
 }
 
+function openSignupSuccessModal(message){
+  document.getElementById('signupSuccessModalMessage').textContent = message;
+  document.getElementById('signupSuccessModalOverlay').style.display = 'flex';
+}
+function closeSignupSuccessModal(){
+  document.getElementById('signupSuccessModalOverlay').style.display = 'none';
+  // Land them back on the sign-in tab, ready to wait for approval.
+  switchAuthMode('signin');
+}
+
 function toggleSidebarNav(){
   const nav = document.getElementById('sidebarNav');
   const hamburger = document.getElementById('sidebarHamburger');
@@ -2083,7 +2168,63 @@ async function removeScan(id){
 // already decided. Admin no longer has an approval panel on Overview —
 // this page is the only place approvals happen now; admin sees the outcome
 // via the store card badges and the exported Remarks column.
+async function renderSignupRequestsPanel(){
+  const card = document.getElementById('signupRequestsCard');
+  if(!card) return;
+  // Only a circle head ever has auditor requests routed to them — admins
+  // review every request from their own Users & Stores tab instead.
+  if(!isCircleHeadUser() || !currentUser){ card.style.display = 'none'; return; }
+  card.style.display = '';
+  try{
+    const { data, error } = await sb.from('profiles').select('*')
+      .eq('target_circle_head_id', currentUser.id).eq('approved', false).order('created_at', {ascending:true});
+    if(error) throw error;
+    const countEl = document.getElementById('signupRequestsCount');
+    if(countEl) countEl.textContent = (data||[]).length;
+    const listEl = document.getElementById('signupRequestsList');
+    if(listEl){
+      listEl.innerHTML = (data && data.length) ? data.map(p => `
+        <div class="missing-base-row">
+          <div class="missing-base-row-info"><b>${displayNameFor(p.email, p.full_name)}</b><span>${p.email} · wants to audit <b>${p.requested_store||'—'}</b> (${circleFor(p.requested_store||'')}) · ${new Date(p.created_at).toLocaleDateString()}</span></div>
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="approveSignupRequest('${p.id}')">Approve</button>
+            <button class="btn btn-danger" onclick="rejectSignupRequest('${p.id}','${(p.email||'').replace(/'/g,"&apos;")}')">Reject</button>
+          </div>
+        </div>`).join('') : '<div class="empty-note">No sign-up requests waiting on you right now.</div>';
+    }
+  }catch(e){
+    console.error(e);
+  }
+}
+
+async function approveSignupRequest(userId){
+  try{
+    const { error } = await sb.from('profiles').update({approved:true}).eq('id', userId);
+    if(error) throw error;
+    showMessage('Auditor approved — they can sign in now.');
+    renderSignupRequestsPanel();
+  }catch(e){
+    console.error(e);
+    showMessage('Could not approve: ' + errMsg(e), true);
+  }
+}
+
+function rejectSignupRequest(userId, email){
+  confirmAction('signup-reject-'+userId, `This permanently rejects the sign-up request from ${email}`, async () => {
+    try{
+      const { error } = await sb.from('profiles').delete().eq('id', userId);
+      if(error) throw error;
+      showMessage(`Rejected ${email}.`);
+      renderSignupRequestsPanel();
+    }catch(e){
+      console.error(e);
+      showMessage('Could not reject: ' + errMsg(e), true);
+    }
+  });
+}
+
 function renderApprovalsPage(){
+  renderSignupRequestsPanel();
   reconcile(); // make sure detailResults reflects the latest scans before showing variance
   const relevantLocks = isCircleHeadUser()
     ? storeLocks.filter(l => myAssignedCircles.includes(circleFor(l.store)))
@@ -2341,6 +2482,17 @@ function reconcile(){
 // Circle-level rollup card — shared by both the admin's drilled-in
 // territory view and a circle head's own Circle Summary, so the two never
 // drift out of sync on what a "circle card" actually shows.
+// Same color logic the store-card stamps use (zero/critical/variance/match),
+// applied to a circle/circle-head rollup card: not-started stores stay blue
+// (informational, not a failure), any short units read red (critical), any
+// excess-only/partial variance reads amber, and a clean full match reads green.
+function rollupStatusClass(auditedCount, shortCount, excessCount, totalRows){
+  if(auditedCount === 0) return 'circle-rollup-card-notstarted';
+  if(shortCount > 0) return 'circle-rollup-card-critical';
+  if(excessCount > 0 || (totalRows > 0 && shortCount + excessCount > 0)) return 'circle-rollup-card-variance';
+  return 'circle-rollup-card-match';
+}
+
 function renderCircleCards(circles){
   const cards = circles.slice().sort().map(circle => {
     const circleAllStores = Object.keys(STORE_MASTER).filter(s => circleFor(s) === circle);
@@ -2354,7 +2506,8 @@ function renderCircleCards(circles){
     const statsLine = circleAuditedStores.length === 0
       ? `<span class="circle-rollup-not-started">Not submitted / Not audited yet</span>`
       : `<span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span>`;
-    return `<div class="circle-rollup-card${selected?' circle-rollup-card-selected':''}" onclick="setDashboardCircleFilter('${selected?'':circle}');document.getElementById('storeGridSection').scrollIntoView({behavior:'smooth'});">
+    const statusCls = rollupStatusClass(circleAuditedStores.length, sh, ex, m+sh+ex);
+    return `<div class="circle-rollup-card ${statusCls}${selected?' circle-rollup-card-selected':''}" onclick="setDashboardCircleFilter('${selected?'':circle}');document.getElementById('storeGridSection').scrollIntoView({behavior:'smooth'});">
       <div class="circle-rollup-name">${circle}</div>
       <div class="circle-rollup-meta">${circleAuditedStores.length}/${circleAllStores.length} stores audited</div>
       <div class="circle-rollup-stats">${statsLine}</div>
@@ -2371,7 +2524,7 @@ function renderCircleHeadCards(){
   if(!circleHeadsCache || !circleHeadsCache.length){
     const allCircles = [...new Set(Object.values(STORE_MASTER))];
     return `<div class="empty-note">No Circle Heads set up yet — assign the role and circles from Users &amp; Stores. Showing ${allCircles.length} unassigned circle${allCircles.length===1?'':'s'}.</div>` +
-      `<div class="circle-rollup-card" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})'>
+      `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})'>
         <div class="circle-rollup-name">Unassigned</div>
         <div class="circle-rollup-meta">${allCircles.length} circle${allCircles.length===1?'':'s'} · no Circle Head yet</div>
       </div>`;
@@ -2393,13 +2546,14 @@ function renderCircleHeadCards(){
     const statsLine = headAudited.length === 0
       ? `<span class="circle-rollup-not-started">Not submitted / Not audited yet</span>`
       : `<span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span>`;
-    return `<div class="circle-rollup-card" onclick='viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})'>
+    const statusCls = rollupStatusClass(headAudited.length, sh, ex, m+sh+ex);
+    return `<div class="circle-rollup-card ${statusCls}" onclick='viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})'>
       <div class="circle-rollup-name">${head.name}</div>
       <div class="circle-rollup-meta">${head.circles.join(', ')} · ${headAudited.length}/${headStores.length} stores audited</div>
       <div class="circle-rollup-stats">${statsLine}</div>
     </div>`;
   }).join('');
-  const unassignedCard = unassigned.length ? `<div class="circle-rollup-card" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})'>
+  const unassignedCard = unassigned.length ? `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})'>
       <div class="circle-rollup-name">Unassigned</div>
       <div class="circle-rollup-meta">${unassigned.join(', ')} · no Circle Head yet</div>
     </div>` : '';
@@ -2435,6 +2589,18 @@ async function loadCircleHeadsForAdmin(){
     circleHeadsCache = [];
     renderDashboard();
   }
+}
+
+// Which stores the current viewer is scoped to before any manual filter —
+// a circle head's own circles, or (for an admin) the Circle Head territory
+// they've drilled into from the Circle Head Summary card. null = no
+// restriction (full admin/client view). Shared by renderDashboard (so every
+// KPI/table on screen agrees) and downloadExcel (so the "Download Excel
+// report" button never leaks another circle head's data).
+function currentRoleScopedStores(){
+  if(isCircleHeadUser()) return new Set(Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))));
+  if(isAppAdmin() && adminViewingCircleHead) return new Set(Object.keys(STORE_MASTER).filter(s => adminViewingCircleHead.circles.includes(circleFor(s))));
+  return null;
 }
 
 function renderDashboard(){
@@ -2482,9 +2648,7 @@ function renderDashboard(){
   // restriction. This is what makes an admin's drill into one Circle
   // Head's territory (or a circle head's own view) actually change every
   // number on the page, not just the store-card grid below.
-  let roleScopedStores = null;
-  if(isCircleHeadUser()) roleScopedStores = new Set(Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))));
-  if(isAppAdmin() && adminViewingCircleHead) roleScopedStores = new Set(Object.keys(STORE_MASTER).filter(s => adminViewingCircleHead.circles.includes(circleFor(s))));
+  let roleScopedStores = currentRoleScopedStores();
 
   // "Pending" is measured against the full store master list minus whatever's
   // actually been locked/submitted — not against which stores happen to have
@@ -2526,8 +2690,15 @@ function renderDashboard(){
   // a store — so a newly-assigned store or a genuine zero-stock store
   // (locked with nothing to scan) is counted correctly either way.
   const isAdminUser = currentProfile && currentProfile.role === 'admin';
+  // myAssignedStores is only ever populated for an auditor ('user') login —
+  // a circle head has no per-store assignment list, just circles, so that
+  // branch used to silently fall through to an empty array (permanent
+  // "0 / 0 stores completed"). roleScopedStores (computed above) already
+  // holds exactly the right store set for a circle head — their own
+  // circle(s), or an admin's drilled-in Circle Head territory.
   const progressScopeStores = isAdminUser
     ? [...new Set([...allStoreAssignments.map(a=>normalizeStoreCode(a.store_code)), ...totalBaseStores])]
+    : roleScopedStores ? [...roleScopedStores]
     : myAssignedStores.slice();
   const progressCompletedStores = progressScopeStores.filter(s => storeLocks.some(l => l.store === s));
   const progressPct = progressScopeStores.length ? Math.round((progressCompletedStores.length/progressScopeStores.length)*100) : 0;
@@ -2708,7 +2879,11 @@ function renderDashboard(){
     filterSelect.innerHTML = '<option value="">Filters: all stores</option>' + stores.map(s => `<option value="${s}"${dashboardStoreFilter===s?' selected':''}>${s}</option>`).join('');
   }
 
-  const filteredDetail = dashboardStoreFilter ? detailResults.filter(r=>r.store===dashboardStoreFilter) : detailResults;
+  // scopedResults already carries the role/drill scope AND the store/circle
+  // filters (computed above as effectiveScope) — using it here (instead of
+  // raw detailResults) is what keeps this table in sync with an admin's
+  // Circle Head drill-in instead of always showing every circle's rows.
+  const filteredDetail = scopedResults;
   const searchTerm = (document.getElementById('detailSearch') ? document.getElementById('detailSearch').value : '').trim().toLowerCase();
   const searchedDetail = searchTerm ? filteredDetail.filter(r =>
     (r.physicalSerial||'').toLowerCase().includes(searchTerm) ||
@@ -2970,7 +3145,16 @@ function downloadScanTemplate(){
 function downloadExcel(){
   if(!reconciledStores.length){ showMessage('Complete the audit first to generate results.', true); return; }
   const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
-  const stores = reconciledStores.slice().sort();
+  // Scope the export to whatever the viewer is currently allowed/drilled
+  // into — an admin viewing one Circle Head's territory (or a circle head's
+  // own login) gets a report containing only that territory's stores, not
+  // the whole audit.
+  const exportScope = currentRoleScopedStores();
+  const stores = (exportScope ? reconciledStores.filter(s => exportScope.has(s)) : reconciledStores).slice().sort();
+  const scopedDetailResults = exportScope ? detailResults.filter(r => exportScope.has(r.store)) : detailResults;
+  const scopedScanData = exportScope ? scanData.filter(r => exportScope.has(r.store)) : scanData;
+
+  if(exportScope && !stores.length){ showMessage('No stores in this territory to export yet.', true); return; }
 
   const summaryRows = stores.map(store => {
     const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
@@ -2985,18 +3169,18 @@ function downloadExcel(){
     };
   });
 
-  const detailRows = detailResults.map((r,i) => ({
+  const detailRows = scopedDetailResults.map((r,i) => ({
     'Sr. No.': i+1, Store:r.store, Circle:circleFor(r.store),
     'System scan serial number': r.systemSerial || '', SKU: r.sku || '', 'Physical scan serial number': r.physicalSerial || '',
     'Source': sourceLabelFor(r),
     'ASN Number': r.asn || '', // which ASN/order this serial belongs to, for GRN-pending rows — blank for Inventory/Excess
     'Match': r.status==='match' ? 'Match' : '', 'Excess': r.status==='excess' ? 'Excess' : '', 'Short': r.status==='short' ? 'Short' : ''
   }));
-  const scanLogRows = scanData.map(r => ({Store:r.store, Circle:circleFor(r.store), SKU:r.sku, 'Serial Number':r.serial, 'Scanned at':r.ts}));
+  const scanLogRows = scopedScanData.map(r => ({Store:r.store, Circle:circleFor(r.store), SKU:r.sku, 'Serial Number':r.serial, 'Scanned at':r.ts}));
 
   // Dedicated sheet: every GRN-pending serial across the audited stores, and
   // whether it was found in the physical scan or is still pending/short.
-  const grnRows = detailResults
+  const grnRows = scopedDetailResults
     .filter(r => r.source === 'grn')
     .map((r,i) => ({
       'Sr. No.': i+1, Store: r.store, Circle: circleFor(r.store), SKU: r.sku || '',
@@ -3020,7 +3204,8 @@ function downloadExcel(){
   const logWs = XLSX.utils.json_to_sheet(scanLogRows);
   applyAutoFilter(logWs, scanLogRows.length, 5);
   XLSX.utils.book_append_sheet(wb, logWs, 'Scan Log');
-  XLSX.writeFile(wb, `PV_Recon_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
+  const territorySuffix = (isAppAdmin() && adminViewingCircleHead) ? `_${adminViewingCircleHead.name}` : '';
+  XLSX.writeFile(wb, `PV_Recon_${cycle.replace(/[^a-z0-9]/gi,'_')}${territorySuffix.replace(/[^a-z0-9_]/gi,'_')}.xlsx`);
 }
 
 function downloadStoreExcel(store){

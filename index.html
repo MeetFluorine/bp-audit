@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -37,6 +38,23 @@
       <button class="auth-tab" id="authTabSignup" onclick="switchAuthMode('signup')">Sign up</button>
     </div>
     <div class="form-field" id="authNameField" style="margin-bottom:12px;display:none;"><label>Full name</label><input id="authFullName" type="text" style="width:100%;" placeholder="e.g. Chandan Kumar" onkeydown="if(event.key==='Enter'){handleAuthSubmit();}"></div>
+    <div class="form-field" id="authRoleField" style="margin-bottom:12px;display:none;">
+      <label>Sign up as</label>
+      <select id="authRole" style="width:100%;" onchange="handleAuthRoleChange()">
+        <option value="user">Auditor</option>
+        <option value="circle_head">Circle Head</option>
+        <option value="client">Client</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <div class="form-field" id="authStoreField" style="margin-bottom:12px;display:none;">
+      <label>Which store will you audit?</label>
+      <select id="authStore" style="width:100%;"></select>
+    </div>
+    <div class="form-field" id="authCirclesField" style="margin-bottom:12px;display:none;">
+      <label>Which circle(s) will you head?</label>
+      <div class="store-chip-row" id="authCirclesChips"></div>
+    </div>
     <div class="form-field" style="margin-bottom:12px;"><label>Email</label><input id="authEmail" type="email" style="width:100%;" placeholder="you@company.com" onkeydown="if(event.key==='Enter'){handleAuthSubmit();}"></div>
     <div class="form-field" style="margin-bottom:6px;"><label>Password</label>
       <div class="password-wrap">
@@ -120,7 +138,7 @@
       </div>
 
       <p class="nav-group-label">Operations</p>
-      <div class="nav-item" id="tab-scan" onclick="showStep('scan')">
+      <div class="nav-item cap-scan-only" id="tab-scan" onclick="showStep('scan')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
         <span class="nav-text">
           <span class="nav-label">Scan / Upload</span>
@@ -378,6 +396,11 @@
 
   <!-- APPROVALS (circle head) -->
   <div class="panel-view" id="view-approvals">
+    <div class="card" id="signupRequestsCard">
+      <h4>Pending Sign-up Requests <span id="signupRequestsCount" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;">0</span></h4>
+      <p class="hint">Auditors who picked one of your stores when they signed up — routed straight to you instead of admin. Approving grants them access immediately (their store assignment is already set from what they chose at sign-up).</p>
+      <div id="signupRequestsList"></div>
+    </div>
     <div class="card">
       <h4>Pending Approvals <span id="approvalsPageCount" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;">0</span></h4>
       <p class="hint">Stores your auditors have submitted, with their full variance so you can review before signing off. Approving or rejecting is a review record — the submitted data already counts in the numbers on Overview either way. Your remark carries through to the exported report's Remarks column.</p>
@@ -636,6 +659,20 @@
   </div>
   </main>
 </div>
+</div>
+
+<!-- SIGN-UP SUCCESS MODAL — tells the person who approves their request -->
+<div id="signupSuccessModalOverlay" class="crop-modal-overlay" style="display:none;">
+  <div class="crop-modal confirm-modal">
+    <div class="confirm-modal-icon">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    </div>
+    <h4 style="text-align:center;margin:0 0 6px;">Account created</h4>
+    <p id="signupSuccessModalMessage" style="text-align:center;margin:0 0 22px;font-size:14px;color:var(--text);"></p>
+    <div class="btn-row" style="justify-content:center;">
+      <button class="btn btn-primary" onclick="closeSignupSuccessModal()">Got it</button>
+    </div>
+  </div>
 </div>
 
 <!-- YES/NO CONFIRM MODAL -->

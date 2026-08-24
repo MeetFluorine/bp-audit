@@ -32,7 +32,17 @@ New sign-ups are **not** usable until an admin approves them from the Admin tab 
 5. Open `js/config.js` and replace `SUPABASE_URL` and `SUPABASE_ANON_KEY` with your own values.
 6. Go to **Authentication → URL Configuration** and add the exact URL you'll deploy this to (e.g. `https://yourname.github.io/reponame/`) under **Redirect URLs**. This is required for the "Forgot password" email link to work — Supabase rejects password-reset redirects to any URL that isn't on this allowlist.
 
-> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database (then step 6 above if you haven't already — needed for the new Forgot Password feature), `supabase/add_grn_source_type.sql` once to add GRN-pending stock support, `supabase/add_roles_circles_approval.sql` once to add the Circle Head / Client roles and the approval workflow, `supabase/add_grn_asn_column.sql` once to add ASN-number traceability on GRN Pending rows, and `supabase/add_auto_complete_and_circlehead_upload.sql` once to add automatic cycle completion and Circle Head base-data upload rights (see below for all of these).
+> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database (then step 6 above if you haven't already — needed for the new Forgot Password feature), `supabase/add_grn_source_type.sql` once to add GRN-pending stock support, `supabase/add_roles_circles_approval.sql` once to add the Circle Head / Client roles and the approval workflow, `supabase/add_grn_asn_column.sql` once to add ASN-number traceability on GRN Pending rows, `supabase/add_auto_complete_and_circlehead_upload.sql` once to add automatic cycle completion and Circle Head base-data upload rights, and `supabase/add_signup_role_routing.sql` once to let sign-up pick a role and route an auditor's approval straight to their store's circle head (see below for all of these).
+
+## Sign-up now asks which role you're requesting
+
+The sign-up form has a role dropdown — Auditor, Circle Head, Client, or Admin — plus a role-specific follow-up: an auditor picks the one store they'll be auditing, a circle head picks every circle they want. Both choices are pre-provisioned into `user_stores`/`user_circles` immediately at sign-up, so approval alone is enough to grant full access — nothing else to configure afterward.
+
+Approval routing depends on the role:
+- **Admin / Client / Circle Head** requests still go to an admin, same as before — visible (with the requested role and, for a circle head, their requested circles) right in **Admin -> Users & Stores -> Pending Sign-ups**.
+- **Auditor** requests are routed to *that store's* circle head instead — they get a new **Pending Sign-up Requests** panel at the top of their **Approvals** page, scoped to just the requests for their own stores, with Approve/Reject. This is enforced by RLS (`target_circle_head_id`), not just hidden in the UI. If the requested store doesn't have a circle head yet, the request simply falls back to admin-only, same as before. Admins can always see and act on every pending request regardless of role — the circle-head routing adds a second reviewer, it never removes admin's.
+
+Run `supabase/add_signup_role_routing.sql` once to enable this on an existing project.
 
 ## Circle Head can now set up base data — for their own circle only
 
