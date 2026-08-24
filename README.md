@@ -32,7 +32,46 @@ New sign-ups are **not** usable until an admin approves them from the Admin tab 
 5. Open `js/config.js` and replace `SUPABASE_URL` and `SUPABASE_ANON_KEY` with your own values.
 6. Go to **Authentication → URL Configuration** and add the exact URL you'll deploy this to (e.g. `https://yourname.github.io/reponame/`) under **Redirect URLs**. This is required for the "Forgot password" email link to work — Supabase rejects password-reset redirects to any URL that isn't on this allowlist.
 
-> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database (then step 6 above if you haven't already — needed for the new Forgot Password feature), and `supabase/add_grn_source_type.sql` once to add GRN-pending stock support (see below).
+> **Already running this in production?** You don't need to redo the whole schema — just run `supabase/add_profile_name_avatar.sql` once to add name/profile-picture support to your existing database (then step 6 above if you haven't already — needed for the new Forgot Password feature), `supabase/add_grn_source_type.sql` once to add GRN-pending stock support, `supabase/add_roles_circles_approval.sql` once to add the Circle Head / Client roles and the approval workflow, `supabase/add_grn_asn_column.sql` once to add ASN-number traceability on GRN Pending rows, and `supabase/add_auto_complete_and_circlehead_upload.sql` once to add automatic cycle completion and Circle Head base-data upload rights (see below for all of these).
+
+## Circle Head can now set up base data — for their own circle only
+
+A Circle Head sees **Setup Base Data** in their nav now (scoped to their circle): the Pre-Audit Readiness panel, the "Stores Submitted Without Base Data" panel, and the upload itself all only ever show or accept their own circle's stores. There's an optional "restrict to one store" dropdown for extra safety on top. This is enforced by RLS on the `base_serials` insert, not just hidden in the UI — a circle head's credentials genuinely can't insert base data for a store outside their circle even via a direct API call.
+
+## Approvals moved off the admin dashboard, onto a dedicated Circle Head page
+
+The Pending Approvals panel is gone from Overview entirely. A Circle Head now has a dedicated **Approvals** page (linked from the bell icon, which is circle-head-only now and just shows a count) with the full variance detail per pending store — every short/excess serial, its SKU, source, and ASN — plus a remark box and Approve/Reject/Unlock. Their remark carries straight through to the exported report's **Remarks** column, so an admin reviewing the file downstream sees exactly why a store was flagged.
+
+## Circle Head Summary (admin) vs. Circle Summary (circle head)
+
+Admin's Overview page now shows one card **per Circle Head** (not per raw circle) — clicking a card drills into that person's whole territory (every circle they're assigned to), scoping the KPIs, store grid, and detail table below to just their stores, with a "back" banner. Any circle with no Circle Head assigned shows up in its own "Unassigned" card so nothing silently disappears from view. A Circle Head's own Overview keeps the original per-circle cards, each still clickable down to that circle's store results.
+
+## Cycle completion is automatic now
+
+The "Complete audit" admin button is gone. A cycle's `completed` flag is now kept in sync by a database trigger: it flips to `true` the moment every store in the master list is locked **and approved** by its Circle Head (or an admin), and flips back to `false` if that stops being true — a rejection, or a store getting unlocked for correction. This matters most for the Client role, since a client's full detail view only unlocks once a cycle is completed — that now happens the moment the actual audit work is genuinely done, not when someone remembers to click a button.
+
+## Client dashboard trimmed to client-relevant content
+
+A client no longer sees the Circle/Circle-Head Summary rollup, the Stores Pending Audit panel, the Live Activity feed, or the Scan/Upload quick-action — those are operational tools, not something a client needs. What's left: the read-only banner, progress-only KPI on a live cycle (full detail on completion, as before), the store-results grid with export, and the reconciliation detail table.
+
+## GRN Pending uploads: only genuinely-pending rows are kept
+
+A GRN/ASN serial report (like `MultiUOMSerialReport.xlsx`) has a `GRNNo` column that's blank while a serial is still pending inward, and filled in once it's actually been GRN'd — at that point it's Inventory, not GRN Pending, anymore. Uploading a file as **GRN Stock (Pending Inward)** now automatically keeps only the blank-`GRNNo` rows and skips the rest, with a status message telling you how many were skipped and why. The report's `ASNNo` column is also kept (as `asn_no` on each row) purely for traceability — every GRN-sourced row in the Excel export shows which ASN/order it belongs to, so an admin can chase the right delivery instead of just a bare serial number.
+
+## Roles: Admin, Circle Head, Auditor, Client
+
+The app now supports four roles, assigned from **Users & Stores** (admin only):
+
+- **Admin** — full control. Uploads base data, manages cycles, manages users/roles, sees everything.
+- **Circle Head** — assigned to one or more circles (via a chip picker, same UI pattern as an auditor's store assignment). Sees the dashboard scoped to only their circle(s), can approve/reject a submitted store with a remark, and can unlock a store in their own circle for correction. Cannot upload base data or manage users.
+- **Auditor** (`user` role, unchanged) — assigned to specific stores. Scans/submits only their own stores. Gets a new **My Stores** page showing submission/approval status for just their stores — no visibility into other stores' expected data, by design, so they can never see the "answer" before scanning.
+- **Client** — read-only, sees every circle. For a cycle that's still in progress, they only see how many stores have been submitted so far (no match/short/excess numbers, so a mid-cycle "62% short" reading — which is really just "hasn't been counted yet" — never causes false alarm). Full detail and Excel export unlock automatically once a cycle is marked complete.
+
+**This isn't just a UI toggle** — a circle head's and client's data visibility is enforced by Postgres Row Level Security (`can_view_store()` in the migration), so even a direct API call with a circle head's or client's credentials can't read another circle's data or an in-progress cycle's detail.
+
+### Approval workflow
+
+When an auditor submits (locks) a store, it starts **pending**. The store's circle head (if one is assigned to that circle) can Approve or Reject with a remark from the dashboard's **Pending Approvals** panel. Admins see the exact same panel and status for every store — a circle head is a review layer, not a gate admins are stuck behind; admins can approve/reject/unlock any store regardless of what a circle head has done. The submitted scan data counts toward every number on the dashboard immediately either way — approval is a sign-off record, not a data gate.
 
 ## GRN pending stock (upload as of a store's complete expected quantity)
 

@@ -56,12 +56,14 @@ create table if not exists base_serials (
   description text,
   serial_no text not null,
   source_type text not null default 'inventory' check (source_type in ('inventory','grn')),
+  asn_no text,  -- GRN-pending rows only: which ASN/order the serial belongs to, for traceability
   uploaded_at timestamptz default now()
 );
 -- Defensive for pre-existing databases where this table was created before
--- sku/description were tracked in this file (e.g. added ad-hoc in Studio).
+-- sku/description/asn_no were tracked in this file (e.g. added ad-hoc in Studio).
 alter table base_serials add column if not exists sku text;
 alter table base_serials add column if not exists description text;
+alter table base_serials add column if not exists asn_no text;
 create index if not exists idx_base_serials_cycle_store on base_serials(cycle_id, store_code);
 create index if not exists idx_base_serials_serial on base_serials(serial_no);
 create index if not exists idx_base_serials_cycle_store_source on base_serials(cycle_id, store_code, source_type);
@@ -93,7 +95,7 @@ create table if not exists profiles (
   email text,
   full_name text,
   avatar_url text,
-  role text not null default 'user' check (role in ('admin','user')),
+  role text not null default 'user' check (role in ('admin','user','circle_head','client')),
   approved boolean not null default false,
   created_at timestamptz default now()
 );
@@ -118,7 +120,12 @@ create trigger on_auth_user_created
 
 -- ------------------------------------------------------------
 -- 6. STORE_LOCKS — once an auditor submits a store's scan work,
---     it locks (no more add/delete/upload) until an admin unlocks it.
+--     it locks (no more add/delete/upload) until an admin (or that
+--     store's circle head) unlocks it. approval_status/approved_by/
+--     approval_remark form a lightweight review layer: a circle head
+--     can Approve/Reject a submission with a remark, and admins
+--     always see the same status + remark and can approve/reject too
+--     — the circle head is a review step, not a gate admins are stuck behind.
 -- ------------------------------------------------------------
 create table if not exists store_locks (
   cycle_id uuid references audit_cycles(id) on delete cascade,
@@ -126,16 +133,30 @@ create table if not exists store_locks (
   locked_by uuid references auth.users(id) on delete set null,
   locked_by_email text,
   locked_at timestamptz default now(),
+  approval_status text not null default 'pending' check (approval_status in ('pending','approved','rejected')),
+  approved_by uuid references auth.users(id) on delete set null,
+  approved_by_email text,
+  approved_at timestamptz,
+  approval_remark text,
   primary key (cycle_id, store_code)
 );
 
 -- ------------------------------------------------------------
--- 7. USER_STORES — which stores each user may audit
+-- 7. USER_STORES — which stores each auditor may audit
 -- ------------------------------------------------------------
 create table if not exists user_stores (
   user_id uuid references profiles(id) on delete cascade,
   store_code text references stores(store_code) on delete cascade on update cascade,
   primary key (user_id, store_code)
+);
+
+-- ------------------------------------------------------------
+-- 7b. USER_CIRCLES — which circle(s) a circle_head may see/act on
+-- ------------------------------------------------------------
+create table if not exists user_circles (
+  user_id uuid references profiles(id) on delete cascade,
+  circle text not null,
+  primary key (user_id, circle)
 );
 
 -- ------------------------------------------------------------
@@ -157,6 +178,43 @@ returns boolean language sql security definer set search_path = public stable as
   select is_admin() or exists (
     select 1 from user_stores where user_id = auth.uid() and store_code = target_store
   );
+$$;
+
+create or replace function is_circle_head()
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (select 1 from profiles where id = auth.uid() and role = 'circle_head');
+$$;
+
+create or replace function is_client_role()
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (select 1 from profiles where id = auth.uid() and role = 'client');
+$$;
+
+create or replace function has_circle_access(target_store text)
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (
+    select 1 from stores st
+    join user_circles uc on uc.circle = st.circle
+    where st.store_code = target_store and uc.user_id = auth.uid()
+  );
+$$;
+
+-- Single source of truth for "can this logged-in user read this store's
+-- audit data for this cycle" — used by base_serials and scans read
+-- policies so the four roles' visibility rules live in one place.
+--   admin        — everything
+--   auditor      — own assigned stores, any cycle status
+--   circle_head  — own circle's stores, any cycle status
+--   client       — any store, but only once the cycle is completed
+create or replace function can_view_store(target_store text, target_cycle uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select
+    is_admin()
+    or has_store_access(target_store)
+    or (is_circle_head() and has_circle_access(target_store))
+    or (is_client_role() and exists (
+      select 1 from audit_cycles c where c.id = target_cycle and c.completed = true
+    ))
 $$;
 
 create or replace function is_store_locked(target_cycle uuid, target_store text)
@@ -207,6 +265,7 @@ alter table base_serials enable row level security;
 alter table scans enable row level security;
 alter table profiles enable row level security;
 alter table user_stores enable row level security;
+alter table user_circles enable row level security;
 alter table store_locks enable row level security;
 
 -- Drop-if-exists first so this file is safe to re-run.
@@ -217,6 +276,7 @@ drop policy if exists "admins update cycles" on audit_cycles;
 drop policy if exists "admins delete cycles" on audit_cycles;
 drop policy if exists "scoped read base_serials" on base_serials;
 drop policy if exists "admins insert base_serials" on base_serials;
+drop policy if exists "admins and circle heads insert base_serials" on base_serials;
 drop policy if exists "scoped read scans" on scans;
 drop policy if exists "scoped insert scans" on scans;
 drop policy if exists "delete own scans" on scans;
@@ -227,9 +287,13 @@ drop policy if exists "users delete own profile" on profiles;
 drop policy if exists "users can create own profile" on profiles;
 drop policy if exists "read own store assignments" on user_stores;
 drop policy if exists "admins manage store assignments" on user_stores;
+drop policy if exists "read own circle assignments" on user_circles;
+drop policy if exists "admins manage circle assignments" on user_circles;
 drop policy if exists "approved users read store locks" on store_locks;
 drop policy if exists "users lock their own assigned stores" on store_locks;
 drop policy if exists "admins unlock any store" on store_locks;
+drop policy if exists "admins and circle heads unlock stores" on store_locks;
+drop policy if exists "approve store submissions" on store_locks;
 
 -- STORES: any approved, logged-in person can read the store master
 create policy "approved users read stores" on stores for select using (is_approved());
@@ -240,17 +304,20 @@ create policy "admins create cycles" on audit_cycles for insert with check (is_a
 create policy "admins update cycles" on audit_cycles for update using (is_admin());
 create policy "admins delete cycles" on audit_cycles for delete using (is_admin());
 
--- BASE_SERIALS: admin uploads; users can read only for their assigned stores
+-- BASE_SERIALS: admin uploads; readable per can_view_store (auditor's own
+-- stores, circle head's own circle, client only on completed cycles)
 create policy "scoped read base_serials" on base_serials for select
-  using (is_admin() or has_store_access(store_code));
-create policy "admins insert base_serials" on base_serials for insert with check (is_admin());
+  using (can_view_store(store_code, cycle_id));
+create policy "admins and circle heads insert base_serials" on base_serials for insert
+  with check (is_admin() or (is_circle_head() and has_circle_access(store_code)));
 
 -- SCANS: users insert/read only within their assigned stores;
 -- deletion restricted to rows they personally scanned (admins: anything).
 -- A locked store (store_locks) blocks non-admin inserts/deletes entirely —
--- this is real enforcement, not just a UI toggle.
+-- this is real enforcement, not just a UI toggle. Read access follows
+-- can_view_store the same as base_serials (insert/delete stay auditor+admin only).
 create policy "scoped read scans" on scans for select
-  using (is_admin() or has_store_access(store_code));
+  using (can_view_store(store_code, cycle_id));
 create policy "scoped insert scans" on scans for insert
   with check (is_admin() or (has_store_access(store_code) and not is_store_locked(cycle_id, store_code)));
 create policy "delete own scans" on scans for delete
@@ -269,11 +336,21 @@ create policy "users can create own profile" on profiles for insert with check (
 create policy "read own store assignments" on user_stores for select using (user_id = auth.uid() or is_admin());
 create policy "admins manage store assignments" on user_stores for all using (is_admin()) with check (is_admin());
 
+-- USER_CIRCLES: users see their own assignments; admins manage all
+create policy "read own circle assignments" on user_circles for select using (user_id = auth.uid() or is_admin());
+create policy "admins manage circle assignments" on user_circles for all using (is_admin()) with check (is_admin());
+
 -- STORE_LOCKS: everyone approved can see lock status; a user can lock
--- (insert) only a store they're assigned to; only admins can unlock
+-- (insert) only a store they're assigned to. Unlocking: admins (any store)
+-- or a circle head (their own circle only). Approving/rejecting a
+-- submission (update) follows the same admin-or-own-circle-head rule.
 create policy "approved users read store locks" on store_locks for select using (is_approved());
 create policy "users lock their own assigned stores" on store_locks for insert with check (has_store_access(store_code));
-create policy "admins unlock any store" on store_locks for delete using (is_admin());
+create policy "admins and circle heads unlock stores" on store_locks for delete
+  using (is_admin() or (is_circle_head() and has_circle_access(store_code)));
+create policy "approve store submissions" on store_locks for update
+  using (is_admin() or (is_circle_head() and has_circle_access(store_code)))
+  with check (is_admin() or (is_circle_head() and has_circle_access(store_code)));
 
 -- ============================================================
 -- 10. AVATARS — profile picture storage
@@ -318,6 +395,44 @@ begin
     alter publication supabase_realtime add table audit_cycles;
   end if;
 end $$;
+
+-- ============================================================
+-- 10c. AUTOMATIC CYCLE COMPLETION
+-- Keeps audit_cycles.completed in sync automatically: true once every
+-- store in the master list is locked AND approved (no pending/rejected
+-- submissions left), false again the moment that stops being true.
+-- Fires off store_locks changes, so it applies regardless of who
+-- triggered them (admin, auditor, or circle head).
+-- ============================================================
+create or replace function sync_cycle_completion()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_cycle_id uuid;
+  v_total_stores int;
+  v_approved_stores int;
+begin
+  v_cycle_id := coalesce(new.cycle_id, old.cycle_id);
+  if v_cycle_id is null then
+    return null;
+  end if;
+  select count(*) into v_total_stores from stores;
+  select count(*) into v_approved_stores from store_locks
+    where cycle_id = v_cycle_id and approval_status = 'approved';
+  if v_total_stores > 0 and v_approved_stores = v_total_stores then
+    update audit_cycles set completed = true, completed_at = coalesce(completed_at, now())
+      where id = v_cycle_id and completed = false;
+  else
+    update audit_cycles set completed = false
+      where id = v_cycle_id and completed = true;
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_sync_cycle_completion on store_locks;
+create trigger trg_sync_cycle_completion
+  after insert or update or delete on store_locks
+  for each row execute function sync_cycle_completion();
 
 -- ============================================================
 -- 11. BOOTSTRAP YOUR FIRST ADMIN

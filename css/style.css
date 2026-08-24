@@ -282,6 +282,7 @@ tbody tr:hover{background:var(--panel-2);}
 
 /* ============ 3-up widget row: quick actions / health / activity ============ */
 .widget-row{display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:16px;margin-bottom:22px;align-items:stretch;}
+body.cap-client .widget-row{grid-template-columns:1fr 1fr;}
 .widget-card{background:var(--panel);border:1px solid var(--border);border-radius:18px;padding:20px 22px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;}
 .widget-card-title{font-family:var(--font-display);font-weight:700;font-size:14px;margin:0 0 16px;color:var(--text);display:flex;justify-content:space-between;align-items:center;}
 .widget-card-title .link{font-family:var(--font-body);font-size:11.5px;font-weight:600;color:var(--steel);cursor:pointer;}
@@ -375,12 +376,45 @@ tbody tr:hover{background:var(--panel-2);}
 .notif-item .btn{align-self:flex-start;font-size:11px;padding:6px 10px;}
 
 .missing-base-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);margin-bottom:10px;transition:box-shadow .2s,border-color .2s;}
+.missing-base-row-check{display:flex;align-items:center;}
+.missing-base-row-check input{width:16px;height:16px;accent-color:var(--steel);cursor:pointer;}
 .missing-base-row:last-child{margin-bottom:0;}
-.missing-base-row-info{display:flex;flex-direction:column;gap:2px;font-size:11.5px;color:var(--text-dim);}
+.missing-base-row-info{display:flex;flex-direction:column;gap:2px;font-size:11.5px;color:var(--text-dim);flex:1;}
 .missing-base-row-info b{font-family:var(--font-mono);font-size:13px;color:var(--text);}
 .missing-base-row-actions{display:flex;gap:8px;flex-wrap:wrap;}
 .missing-base-row-actions .btn{font-size:11.5px;padding:7px 11px;}
 .missing-base-row-flash{border-color:var(--amber);box-shadow:0 0 0 3px var(--amber-bg);}
+
+.readiness-strip{display:flex;gap:14px;flex-wrap:wrap;}
+.readiness-item{display:flex;flex-direction:column;gap:4px;padding:14px 20px;border:1px solid var(--border);border-radius:14px;background:var(--panel-2);min-width:140px;}
+.readiness-item-value{font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--text);}
+.readiness-item-label{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;}
+.readiness-item-warn .readiness-item-value{color:var(--red);}
+
+/* Flexbox wrap instead of CSS grid — guarantees cards sit inline/side-by-side
+   and wrap onto new rows as needed, with no risk of an unexpectedly narrow
+   container forcing everything into a single stacked column. */
+#circleRollupCard{display:block;width:100%;}
+.circle-rollup-grid{display:flex;flex-wrap:wrap;gap:14px;width:100%;}
+.circle-rollup-card{flex:1 1 240px;max-width:320px;padding:16px 18px;border:1px solid var(--border);border-radius:14px;background:var(--panel-2);cursor:pointer;transition:border-color .15s;}
+.circle-rollup-card:hover{border-color:var(--steel);}
+.circle-rollup-card-selected{border-color:var(--steel);box-shadow:0 0 0 2px var(--green-bg);}
+.circle-rollup-name{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text);margin-bottom:6px;}
+.circle-rollup-meta{font-size:11px;color:var(--text-faint);margin-bottom:10px;}
+.circle-rollup-stats{display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-dim);}
+.circle-rollup-stats b{color:var(--text);}
+.circle-rollup-not-started{color:var(--amber);font-weight:600;}
+
+.approval-row{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);margin-bottom:10px;}
+.approval-row:last-child{margin-bottom:0;}
+.approval-row-info{display:flex;flex-direction:column;gap:2px;font-size:11.5px;color:var(--text-dim);}
+.approval-row-info b{font-family:var(--font-mono);font-size:13px;color:var(--text);}
+.approval-row-actions{display:flex;flex-direction:column;gap:8px;min-width:260px;}
+.approval-row-actions textarea{width:100%;min-height:44px;resize:vertical;border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11.5px;font-family:var(--font-body);background:var(--panel);color:var(--text);}
+.approval-row-actions .btn-row{gap:8px;}
+.badge-pending{color:var(--amber);background:var(--amber-bg);}
+.badge-approved{color:var(--green);background:var(--green-bg);}
+.badge-rejected{color:var(--red);background:var(--red-bg);}
 .status-strip{display:flex;justify-content:space-between;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px 18px;margin-bottom:18px;font-size:12.5px;color:var(--text-dim);box-shadow:var(--shadow-sm);}
 .status-strip.locked{border-color:var(--steel);background:var(--steel-bg);color:var(--text);}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);}
@@ -427,6 +461,45 @@ body.role-admin .nav-item.admin-only{display:flex;}
 .nav-group-label.admin-only{display:none;}
 body.role-admin .nav-group-label.admin-only{display:block;}
 
+/* Capability-based visibility — a role can hold more than one capability
+   (e.g. a Circle Head gets cap-dashboard AND cap-approve), unlike the
+   single-role admin-only class above. */
+.cap-dashboard-only{display:none;}
+body.cap-dashboard .cap-dashboard-only{display:inline-flex;}
+.nav-item.cap-dashboard-only{display:none;}
+body.cap-dashboard .nav-item.cap-dashboard-only{display:flex;}
+
+.cap-mystores-only{display:none;}
+body.cap-mystores .cap-mystores-only{display:inline-flex;}
+.nav-item.cap-mystores-only{display:none;}
+body.cap-mystores .nav-item.cap-mystores-only{display:flex;}
+
+.cap-setup-only{display:none;}
+body.cap-setup .cap-setup-only{display:inline-flex;}
+.nav-item.cap-setup-only{display:none;}
+body.cap-setup .nav-item.cap-setup-only{display:flex;}
+
+.cap-approve-only{display:none;}
+body.cap-approve .cap-approve-only{display:inline-flex;}
+.nav-item.cap-approve-only{display:none;}
+body.cap-approve .nav-item.cap-approve-only{display:flex;}
+
+.cap-ops-only{display:none;}
+body.cap-ops .cap-ops-only{display:inline-flex;}
+.nav-item.cap-ops-only{display:none;}
+body.cap-ops .nav-item.cap-ops-only{display:flex;}
+
+.cap-circlehead-only{display:none;}
+body.role-circlehead .cap-circlehead-only{display:block;}
+
+.cap-client-only{display:none;}
+body.cap-client .cap-client-only{display:inline-flex;}
+
+/* Hidden by default for everyone; a client sees the app in a visibly
+   read-only mode so it's never ambiguous why buttons are missing. */
+.client-readonly-banner{display:none;}
+body.cap-client .client-readonly-banner{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);border-radius:12px;font-size:12.5px;margin-bottom:18px;}
+
 .user-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border-soft);gap:16px;flex-wrap:wrap;}
 .user-row:last-child{border-bottom:none;}
 .user-row-email{font-family:var(--font-mono);font-size:12.5px;min-width:180px;color:var(--text);}
@@ -437,6 +510,10 @@ body.role-admin .nav-group-label.admin-only{display:block;}
 .role-pill{font-size:10px;font-family:var(--font-mono);padding:2px 8px;border-radius:10px;letter-spacing:0.4px;}
 .role-pill.admin{background:var(--amber-bg);color:var(--amber);}
 .role-pill.user{background:var(--panel-2);color:var(--text-dim);}
+.role-pill.circle_head{background:var(--green-bg);color:var(--green);}
+.role-pill.client{background:var(--blue-bg,var(--panel-2));color:var(--blue,var(--text-dim));}
+.role-select{font-size:11.5px;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--text);}
+.user-row-assign-label{font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.5px;margin-right:6px;align-self:center;}
 
 @media (max-width:1180px){
   .kpi-strip{grid-template-columns:repeat(2,1fr);}

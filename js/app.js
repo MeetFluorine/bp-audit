@@ -11,6 +11,15 @@ let reconciledStores = []; // every store that counts as "audited" for this cycl
 let auditCompleted = false;
 let dashboardStoreFilter = null;
 
+// Admin's "Circle Head Summary" drill state: null = showing all circle
+// heads; set = showing that one person's whole territory (their circles'
+// stores), with a "back" banner. circleHeadsCache is the list of circle_head
+// profiles + their circle assignments — null until first loaded (lazily, on
+// an admin's first dashboard render), then cached so realtime refreshes
+// don't re-fetch it every time.
+let adminViewingCircleHead = null;
+let circleHeadsCache = null;
+
 function setDashboardStoreFilter(store){
   dashboardStoreFilter = (dashboardStoreFilter === store) ? null : store;
   renderDashboard();
@@ -106,7 +115,7 @@ function updateTopbarUser(){
     else { el.textContent = initials; }
   });
   const tName = document.getElementById('topbarAvatarName'); if(tName) tName.textContent = name;
-  const tRole = document.getElementById('topbarAvatarRole'); if(tRole) tRole.textContent = role === 'admin' ? 'Administrator' : 'Auditor';
+  const tRole = document.getElementById('topbarAvatarRole'); if(tRole) tRole.textContent = roleLabel(role);
   const greetEl = document.getElementById('greetTitle');
   if(greetEl) greetEl.textContent = `${greetingWord()}, ${name} \ud83d\udc4b`;
 }
@@ -208,6 +217,32 @@ function sparklineLineSVG(values, color){
 let currentUser = null;      // { id, email }
 let currentProfile = null;   // { role, approved }
 let myAssignedStores = [];   // store codes this user can access (empty for admin = all)
+let myAssignedCircles = [];  // circles this circle_head can access (empty for non-circle_head)
+
+// ---- Role helpers (client-side convenience only — RLS is the real
+// enforcement boundary; these just drive what the UI shows). ----
+function isAppAdmin(){ return !!(currentProfile && currentProfile.role === 'admin'); }
+function isCircleHeadUser(){ return !!(currentProfile && currentProfile.role === 'circle_head'); }
+function isClientUser(){ return !!(currentProfile && currentProfile.role === 'client'); }
+function isAuditorUser(){ return !!(currentProfile && currentProfile.role === 'user'); }
+function roleLabel(role){
+  return role === 'admin' ? 'Administrator' : role === 'circle_head' ? 'Circle Head' : role === 'client' ? 'Client' : 'Auditor';
+}
+function bodyClassesForRole(role){
+  const classes = ['role-' + (role === 'circle_head' ? 'circlehead' : role)];
+  if(role === 'admin' || role === 'circle_head' || role === 'client') classes.push('cap-dashboard');
+  if(role === 'admin' || role === 'circle_head') classes.push('cap-setup');
+  if(role === 'admin' || role === 'circle_head') classes.push('cap-ops'); // operational tools: pending-stores panel, circle/circle-head rollup — not shown to a client
+  if(role === 'circle_head') classes.push('cap-approve'); // approvals are circle-head-only now — admin reviews via export, not a dashboard panel
+  if(role === 'user') classes.push('cap-mystores');
+  if(role === 'client') classes.push('cap-client');
+  return classes.join(' ');
+}
+// Whether the current user is allowed to unlock/approve this particular store
+// (admin: any store; circle head: only their own circle's stores).
+function canModerateStore(store){
+  return isAppAdmin() || (isCircleHeadUser() && myAssignedCircles.includes(circleFor(store)));
+}
 let authMode = 'signin';
 
 function togglePasswordVisibility(inputId, btn){
@@ -305,7 +340,8 @@ async function handleSignOut(){
   unsubscribeRealtime();
   stopDashboardPolling();
   if(sb) await sb.auth.signOut();
-  currentUser = null; currentProfile = null; myAssignedStores = [];
+  currentUser = null; currentProfile = null; myAssignedStores = []; myAssignedCircles = [];
+  circleHeadsCache = null; adminViewingCircleHead = null;
   document.body.className = '';
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('pendingScreen').style.display = 'none';
@@ -367,25 +403,38 @@ async function onLoginSuccess(knownUser){
     document.getElementById('authScreen').style.display = 'none';
     document.getElementById('pendingScreen').style.display = 'none';
     document.getElementById('appRoot').style.display = 'block';
-    document.body.className = (profile.role === 'admin' ? 'role-admin' : 'role-user') + (document.body.classList.contains('theme-dark') ? ' theme-dark' : '');
+    document.body.className = bodyClassesForRole(profile.role) + (document.body.classList.contains('theme-dark') ? ' theme-dark' : '');
     const whoAmIEl = document.getElementById('whoAmI');
-    whoAmIEl.textContent = `${displayNameFor(user.email, profile.full_name)} · ${profile.role}`;
+    whoAmIEl.textContent = `${displayNameFor(user.email, profile.full_name)} · ${roleLabel(profile.role)}`;
     whoAmIEl.title = user.email;
     updateTopbarUser();
 
     const requestedStep = location.hash.replace('#','');
-    const wantsAdminOnlyPage = ['setup','dashboard','admin'].includes(requestedStep);
+    // Which routes each role is allowed to land on directly (deep link or nav click).
+    // Anything outside this list falls back to that role's default page.
+    const allowedByRole = {
+      admin: ['setup','scan','dashboard','admin','profile','compare'],
+      circle_head: ['dashboard','setup','approvals','profile'],
+      client: ['dashboard','profile'],
+      user: ['scan','mystores','profile']
+    };
+    const defaultByRole = { admin:'dashboard', circle_head:'dashboard', client:'dashboard', user:'scan' };
+    const allowed = allowedByRole[profile.role] || allowedByRole.user;
 
-    if(profile.role !== 'admin'){
+    if(profile.role === 'user'){
       const { data: assigned } = await sb.from('user_stores').select('store_code').eq('user_id', user.id);
       myAssignedStores = (assigned || []).map(r => normalizeStoreCode(r.store_code));
-      const landing = (VALID_ROUTE_STEPS.includes(requestedStep) && !wantsAdminOnlyPage) ? requestedStep : 'scan';
-      showStep(landing, true);
+      myAssignedCircles = [];
+    } else if(profile.role === 'circle_head'){
+      myAssignedStores = [];
+      const { data: circles } = await sb.from('user_circles').select('circle').eq('user_id', user.id);
+      myAssignedCircles = (circles || []).map(r => r.circle);
     } else {
       myAssignedStores = [];
-      const landing = VALID_ROUTE_STEPS.includes(requestedStep) ? requestedStep : 'dashboard';
-      showStep(landing, true);
+      myAssignedCircles = [];
     }
+    const landing = allowed.includes(requestedStep) ? requestedStep : defaultByRole[profile.role];
+    showStep(landing, true);
 
     if(profile.role === 'admin') renderAdminPanel();
     startIdleTimer();
@@ -499,19 +548,32 @@ async function renderAdminPanel(){
     if(apprErr) throw apprErr;
     const { data: allAssignments, error: assignErr } = await sb.from('user_stores').select('*');
     if(assignErr) throw assignErr;
+    const { data: allCircleAssignments, error: circleAssignErr } = await sb.from('user_circles').select('*');
+    if(circleAssignErr) throw circleAssignErr;
 
     const storeCodes = Object.keys(STORE_MASTER).sort();
+    const circleCodes = [...new Set(Object.values(STORE_MASTER))].sort();
+    const roles = ['user','circle_head','client','admin'];
+    const roleNames = {user:'Auditor', circle_head:'Circle Head', client:'Client', admin:'Admin'};
     const listEl = document.getElementById('approvedUsersList');
     listEl.innerHTML = (approvedUsers || []).map(u => {
       const myStores = new Set((allAssignments||[]).filter(a=>a.user_id===u.id).map(a=>normalizeStoreCode(a.store_code)));
-      const chips = storeCodes.map(sc => `<span class="store-chip ${myStores.has(sc)?'active':''}" onclick="toggleStoreAssignment('${u.id}','${sc}',${myStores.has(sc)})">${sc}</span>`).join('');
+      const myCircles = new Set((allCircleAssignments||[]).filter(a=>a.user_id===u.id).map(a=>a.circle));
+      const storeChips = storeCodes.map(sc => `<span class="store-chip ${myStores.has(sc)?'active':''}" onclick="toggleStoreAssignment('${u.id}','${sc}',${myStores.has(sc)})">${sc}</span>`).join('');
+      const circleChips = circleCodes.map(c => `<span class="store-chip ${myCircles.has(c)?'active':''}" onclick="toggleCircleAssignment('${u.id}','${c}',${myCircles.has(c)})">${c}</span>`).join('');
+      const assignmentBlock = u.role === 'user'
+        ? `<div class="user-row-stores"><span class="user-row-assign-label">Stores:</span>${storeChips}</div>`
+        : u.role === 'circle_head'
+          ? `<div class="user-row-stores"><span class="user-row-assign-label">Circles:</span>${circleChips}</div>`
+          : `<div class="user-row-stores"><span class="user-row-assign-label" style="color:var(--text-faint);">No store/circle assignment needed for this role.</span></div>`;
       const avatarHtml = u.avatar_url ? `<img src="${u.avatar_url}" alt="" class="avatar-img">` : initialsFor(u.email, u.full_name);
+      const roleOptions = roles.map(r => `<option value="${r}"${u.role===r?' selected':''}>${roleNames[r]}</option>`).join('');
       return `<div class="user-row">
         <input type="checkbox" class="approved-select-box" data-id="${u.id}" ${selectedApprovedIds.has(u.id)?'checked':''} onchange="toggleApprovedSelect('${u.id}', this.checked)" style="margin-top:4px;">
         <div class="user-row-email"><span class="user-avatar-sm">${avatarHtml}</span> ${displayNameFor(u.email, u.full_name)} <span class="role-pill ${u.role}">${u.role}</span><br><span style="color:var(--text-faint);font-size:11px;margin-left:34px;">${u.email}</span></div>
-        <div class="user-row-stores">${chips}</div>
+        ${assignmentBlock}
         <div class="btn-row">
-          ${u.role!=='admin' ? `<button class="btn" onclick="promoteToAdmin('${u.id}')">Make admin</button>` : ''}
+          <select class="role-select" onchange="changeUserRole('${u.id}', this.value, '${roleNames[u.role].replace(/'/g,"\\'")}')" ${u.id === (currentUser?currentUser.id:null) ? 'disabled title="You can\'t change your own role"' : ''}>${roleOptions}</select>
           ${u.id !== (currentUser?currentUser.id:null) ? `<button class="btn btn-danger" onclick="adminDeleteUser('${u.id}','${u.email.replace(/'/g,"\\'")}')">Delete user</button>` : ''}
         </div>
       </div>`;
@@ -537,18 +599,21 @@ async function approveUser(userId){
   }
 }
 
-async function promoteToAdmin(userId){
-  confirmAction('promote-'+userId, 'This gives full admin rights to this user', async () => {
+async function changeUserRole(userId, newRole, prevRoleLabel){
+  const roleNames = {user:'Auditor', circle_head:'Circle Head', client:'Client', admin:'Admin'};
+  confirmAction('role-'+userId+'-'+newRole, `This changes this user's role from ${prevRoleLabel} to ${roleNames[newRole]}`, async () => {
     try{
-      const { error } = await sb.from('profiles').update({role:'admin'}).eq('id', userId);
+      const { error } = await sb.from('profiles').update({role:newRole}).eq('id', userId);
       if(error) throw error;
-      showMessage('User promoted to admin.');
+      circleHeadsCache = null; // a role change can add/remove a circle head — force the dashboard rollup to refetch
+      showMessage(`Role updated to ${roleNames[newRole]}.`);
       renderAdminPanel();
     }catch(e){
       console.error(e);
-      showMessage('Could not promote user: ' + errMsg(e), true);
+      showMessage('Could not update role: ' + errMsg(e), true);
+      renderAdminPanel(); // reset the select back to the actual saved role
     }
-  });
+  }, () => renderAdminPanel()); // also reset the select if the confirm is cancelled
 }
 
 async function toggleStoreAssignment(userId, storeCode, currentlyAssigned){
@@ -564,6 +629,23 @@ async function toggleStoreAssignment(userId, storeCode, currentlyAssigned){
   }catch(e){
     console.error(e);
     showMessage('Could not update store assignment: ' + errMsg(e), true);
+  }
+}
+
+async function toggleCircleAssignment(userId, circle, currentlyAssigned){
+  try{
+    if(currentlyAssigned){
+      const { error } = await sb.from('user_circles').delete().eq('user_id', userId).eq('circle', circle);
+      if(error) throw error;
+    } else {
+      const { error } = await sb.from('user_circles').insert({user_id:userId, circle});
+      if(error) throw error;
+    }
+    circleHeadsCache = null; // circle assignments changed — force the dashboard rollup to refetch
+    renderAdminPanel();
+  }catch(e){
+    console.error(e);
+    showMessage('Could not update circle assignment: ' + errMsg(e), true);
   }
 }
 
@@ -776,11 +858,15 @@ async function renderProfilePanel(){
   if(!currentUser || !currentProfile) return;
   const storesLine = currentProfile.role === 'admin'
     ? 'All stores (admin)'
-    : (myAssignedStores.length ? myAssignedStores.join(', ') : 'None assigned yet — contact your admin');
+    : currentProfile.role === 'circle_head'
+      ? (myAssignedCircles.length ? 'Circles: ' + myAssignedCircles.join(', ') : 'No circles assigned yet — contact your admin')
+      : currentProfile.role === 'client'
+        ? 'All circles (read-only — completed cycles only)'
+        : (myAssignedStores.length ? myAssignedStores.join(', ') : 'None assigned yet — contact your admin');
   document.getElementById('profileInfo').innerHTML = `
     Name: ${displayNameFor(currentUser.email, currentProfile.full_name)}<br>
     Email: ${currentUser.email}<br>
-    Role: ${currentProfile.role}<br>
+    Role: ${roleLabel(currentProfile.role)}<br>
     Approved: ${currentProfile.approved ? 'Yes' : 'No'}<br>
     Assigned stores: ${storesLine}`;
 
@@ -997,11 +1083,15 @@ const SERIAL_ALIASES = ['serial','serial no','serial number','serialno','serial#
 const IMEI_ALIASES = ['imei','imei1'];
 const DESC_ALIASES = ['description','desc'];
 // GRN pending source files (e.g. MultiUOMSerialReport) carry a GRN number
-// per row — populated once that unit has actually been GRN'd/inward, blank
-// while it's still pending. We don't currently gate on this at upload time
-// (the admin declares the whole file as GRN via the upload-type selector),
-// but the alias is kept here for findVal() lookups if that's needed later.
+// per row — populated once that unit has actually been GRN'd/inward
+// (already in Inventory now), blank while it's still genuinely pending.
+// When uploading as GRN Stock (Pending Inward), handleBaseUpload keeps only
+// the blank-GRNNo rows and drops the rest — see there for why.
 const GRN_NO_ALIASES = ['grnno','grn no','grn number'];
+// The ASN (order) a GRN-pending serial belongs to — kept purely for
+// traceability in the export ("this short/matched serial is on ASN X"),
+// not used for any matching logic.
+const ASN_ALIASES = ['asnno','asn no','asn number','asn'];
 
 function errMsg(e){
   if(!e) return 'Unknown error';
@@ -1054,6 +1144,7 @@ async function connectToCycle(cycle){
   auditCompleted = !!cycle.completed;
   dashboardStoreFilter = null;
   dashboardCircleFilter = null;
+  adminViewingCircleHead = null;
   updateCycleLabels();
   await fetchCycleData();
   renderBaseTable();
@@ -1183,13 +1274,18 @@ async function fetchAllRows(table, cycleId){
 async function fetchCycleData(){
   if(!currentCycleId) return;
   const baseRows = await fetchAllRows('base_serials', currentCycleId);
-  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, sourceType: r.source_type || 'inventory', uploadedAt:r.uploaded_at}));
+  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, sourceType: r.source_type || 'inventory', asnNo: r.asn_no || null, uploadedAt:r.uploaded_at}));
 
   const scanRows = await fetchAllRows('scans', currentCycleId);
   scanData = (scanRows||[]).map(r => ({id:r.id, store:normalizeStoreCode(r.store_code), sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), rawTs:r.scanned_at, scannedBy:r.scanned_by}));
 
   const lockRows = await fetchAllRows('store_locks', currentCycleId);
-  storeLocks = (lockRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email, lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at}));
+  storeLocks = (lockRows||[]).map(r => ({
+    store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email,
+    lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at,
+    approvalStatus: r.approval_status || 'pending', approvedByEmail: r.approved_by_email || null,
+    approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleString() : null, approvalRemark: r.approval_remark || ''
+  }));
 
   // For admins this is every assignment across every user (used to compute
   // "how many of the stores actually being audited are done"); for a
@@ -1227,11 +1323,13 @@ function showMessage(text, isWarning){
 }
 
 let pendingConfirmFn = null;
+let pendingCancelFn = null;
 let selectedPendingIds = new Set();
 let selectedApprovedIds = new Set();
 
-function confirmAction(key, label, fn){
+function confirmAction(key, label, fn, cancelFn){
   pendingConfirmFn = fn;
+  pendingCancelFn = cancelFn || null;
   document.getElementById('confirmModalMessage').textContent = label + '. Are you sure you want to continue?';
   document.getElementById('confirmModalOverlay').style.display = 'flex';
 }
@@ -1239,13 +1337,15 @@ function confirmAction(key, label, fn){
 function confirmModalYes(){
   document.getElementById('confirmModalOverlay').style.display = 'none';
   const fn = pendingConfirmFn;
-  pendingConfirmFn = null;
+  pendingConfirmFn = null; pendingCancelFn = null;
   if(fn) fn();
 }
 
 function confirmModalNo(){
   document.getElementById('confirmModalOverlay').style.display = 'none';
-  pendingConfirmFn = null;
+  const cancelFn = pendingCancelFn;
+  pendingConfirmFn = null; pendingCancelFn = null;
+  if(cancelFn) cancelFn();
 }
 
 function toggleSidebarNav(){
@@ -1264,11 +1364,11 @@ function closeSidebarNav(){
 }
 
 function showStep(step, skipHistory){
-  ['setup','scan','dashboard','admin','profile','compare'].forEach(s => {
+  ['setup','scan','mystores','dashboard','admin','profile','compare','approvals'].forEach(s => {
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
   });
-  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles'};
+  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', mystores:'My Stores', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles', approvals:'Approvals'};
   const titleEl = document.getElementById('contentTitle');
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
   const labelEl = document.getElementById('sidebarCurrentPageLabel');
@@ -1277,7 +1377,10 @@ function showStep(step, skipHistory){
   closeSidebarNav();
   stopDashboardPolling();
   if(step==='scan') renderScanView();
-  if(step==='dashboard'){ renderDashboard(); if(currentProfile && currentProfile.role === 'admin') startDashboardPolling(); }
+  if(step==='mystores') renderMyStoresView();
+  if(step==='setup') renderBaseTable();
+  if(step==='approvals') renderApprovalsPage();
+  if(step==='dashboard'){ renderDashboard(); if(currentProfile && ['admin','circle_head','client'].includes(currentProfile.role)) startDashboardPolling(); }
   if(step==='admin') renderAdminPanel();
   if(step==='profile') renderProfilePanel();
   if(step==='compare') renderCycleComparison();
@@ -1291,7 +1394,7 @@ function showStep(step, skipHistory){
   if(backBtn) backBtn.style.display = history.length > 1 ? '' : 'none';
 }
 
-const VALID_ROUTE_STEPS = ['setup','scan','dashboard','admin','profile','compare'];
+const VALID_ROUTE_STEPS = ['setup','scan','mystores','dashboard','admin','profile','compare','approvals'];
 window.addEventListener('popstate', () => {
   const step = location.hash.replace('#','');
   if(VALID_ROUTE_STEPS.includes(step) && document.getElementById('appRoot').style.display !== 'none'){
@@ -1334,7 +1437,10 @@ function handleRealtimeChange(){
       const activeId = activeView ? activeView.id : '';
       if(activeId === 'view-dashboard') renderDashboard();
       if(activeId === 'view-scan') renderScanView();
+      if(activeId === 'view-mystores') renderMyStoresView();
       if(activeId === 'view-setup') renderBaseTable();
+      if(activeId === 'view-approvals') renderApprovalsPage();
+      refreshMissingBaseDataNotice(); // bell badge (pending approvals for a circle head) stays live regardless of active page
       // The missing-base-data bell badge depends on storeLocks + baseData,
       // both of which can change from any screen (a store gets submitted
       // while the admin is on Setup, base data gets uploaded while an
@@ -1400,7 +1506,9 @@ function handleBaseUpload(event){
       store: findStore(r),
       sku: findVal(r, SKU_ALIASES),
       desc: findVal(r, DESC_ALIASES),
-      serial: findSerial(r)
+      serial: findSerial(r),
+      grnNo: findVal(r, GRN_NO_ALIASES),
+      asnNo: findVal(r, ASN_ALIASES)
     })).filter(r => r.store); // keep store-only rows too — a blank serial with a store present declares "0 system stock" for that store
 
     if(!parsedRaw.length && rows.length){
@@ -1409,20 +1517,67 @@ function handleBaseUpload(event){
       return;
     }
 
+    // Circle heads can only ever upload for their own circle's stores — this
+    // mirrors the RLS check on the insert itself, so a mixed file (or the
+    // wrong circle entirely) fails loudly here instead of silently at the
+    // database with rows just missing. The optional store dropdown adds a
+    // second, tighter check on top when they want to be extra sure.
+    let outOfScopeCount = 0;
+    let parsedScoped = parsedRaw;
+    if(isCircleHeadUser()){
+      const restrictToStore = document.getElementById('circleHeadUploadStoreSelect');
+      const onlyStore = restrictToStore ? restrictToStore.value : '';
+      parsedScoped = parsedRaw.filter(r => {
+        const inMyCircle = myAssignedCircles.includes(circleFor(r.store));
+        const matchesChosenStore = !onlyStore || r.store === onlyStore;
+        if(inMyCircle && matchesChosenStore) return true;
+        outOfScopeCount++;
+        return false;
+      });
+      if(!parsedScoped.length){
+        showMessage(onlyStore
+          ? `None of the rows in this file matched ${onlyStore} — nothing uploaded.`
+          : `None of the rows in this file are for a store in your circle(s) — nothing uploaded.`, true);
+        event.target.value = '';
+        return;
+      }
+    }
+
+    // GRN Stock (Pending Inward) uploads: a filled GRNNo means that serial has
+    // already been GRN'd/inward — it's Inventory now, not pending — so only
+    // the blank-GRNNo rows are genuinely still pending and get kept here.
+    let alreadyInwardCount = 0;
+    let parsedForType = parsedScoped;
+    if(sourceType === 'grn'){
+      parsedForType = parsedScoped.filter(r => {
+        if(!r.serial) return true; // zero-stock declaration row, unaffected by GRNNo
+        const isAlreadyInward = !!(r.grnNo && String(r.grnNo).trim());
+        if(isAlreadyInward) alreadyInwardCount++;
+        return !isAlreadyInward;
+      });
+    }
+
     // A zero-stock declaration only needs one row per store (per source type); collapse
     // repeats so we don't stack up empty-serial placeholder rows on every re-upload.
     const seenZeroStockStore = new Set();
-    const parsed = parsedRaw.filter(r => {
+    const parsed = parsedForType.filter(r => {
       if(r.serial) return true;
       if(seenZeroStockStore.has(r.store)) return false;
       seenZeroStockStore.add(r.store);
       return true;
     });
 
+    if(!parsed.length){
+      showMessage(alreadyInwardCount ? `All ${alreadyInwardCount} rows in this file already have a GRN number — they're already inward (Inventory now), so nothing was uploaded as GRN Pending.` : 'No valid rows found in this file.', true);
+      event.target.value = '';
+      return;
+    }
+
     document.getElementById('baseUploadStatus').textContent = `Uploading ${parsed.length} ${sourceLabel} rows to Supabase…`;
     try{
       const payload = parsed.map(r => ({
-        cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial, source_type: sourceType
+        cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial, source_type: sourceType,
+        asn_no: sourceType === 'grn' ? (r.asnNo || null) : null
       }));
       const chunkSize = 500;
       for(let i=0; i<payload.length; i+=chunkSize){
@@ -1432,7 +1587,9 @@ function handleBaseUpload(event){
       await fetchCycleData();
       const invCount = baseData.filter(r=>r.sourceType!=='grn').length;
       const grnCount = baseData.filter(r=>r.sourceType==='grn').length;
-      document.getElementById('baseUploadStatus').textContent = `Loaded ${parsed.length} ${sourceLabel} rows from ${file.name} (saved to cycle "${currentCycleName}"). Base data now totals ${baseData.length} rows — ${invCount} Inventory, ${grnCount} GRN pending.`;
+      const skippedNote = alreadyInwardCount ? ` (${alreadyInwardCount} row${alreadyInwardCount===1?'':'s'} skipped — already GRN'd/inward, now Inventory.)` : '';
+      const outOfScopeNote = outOfScopeCount ? ` (${outOfScopeCount} row${outOfScopeCount===1?'':'s'} outside your circle were skipped.)` : '';
+      document.getElementById('baseUploadStatus').textContent = `Loaded ${parsed.length} ${sourceLabel} rows from ${file.name} (saved to cycle "${currentCycleName}").${skippedNote}${outOfScopeNote} Base data now totals ${baseData.length} rows — ${invCount} Inventory, ${grnCount} GRN pending.`;
       renderBaseTable();
       populateStoreSelect();
       event.target.value = '';
@@ -1547,6 +1704,47 @@ function renderBaseTable(){
     tbody.innerHTML = baseData.map(r => `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.serial || '<em>Zero stock declared</em>'}</td><td><span class="badge badge-${r.sourceType==='grn'?'excess':'match'}">${r.sourceType==='grn'?'GRN Pending':'Inventory'}</span></td></tr>`).join('');
   }
   refreshMissingBaseDataNotice();
+  renderPreAuditReadiness();
+  const chStoreSelect = document.getElementById('circleHeadUploadStoreSelect');
+  if(chStoreSelect && isCircleHeadUser()){
+    const prev = chStoreSelect.value;
+    const myStores = Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))).sort();
+    chStoreSelect.innerHTML = '<option value="">— Any store in my circle(s) —</option>' + myStores.map(s => `<option value="${s}">${s} (${circleFor(s)})</option>`).join('');
+    if(myStores.includes(prev)) chStoreSelect.value = prev;
+  }
+}
+
+// Per-store readiness check before scanning starts: does this store have
+// Inventory uploaded? GRN Pending uploaded? Neither? Surfaced as a strip of
+// counts plus a full table, so a gap shows up before a cycle opens for
+// scanning instead of confusing an auditor (or the client) mid-audit.
+function renderPreAuditReadiness(){
+  const strip = document.getElementById('preAuditReadinessStrip');
+  const body = document.getElementById('preAuditReadinessBody');
+  const sub = document.getElementById('preAuditReadinessSub');
+  if(!strip || !body) return;
+  // Circle heads only ever see/manage their own circle's stores here —
+  // matches their base-data upload rights, which are circle-scoped too.
+  const allStores = isCircleHeadUser()
+    ? Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))).sort()
+    : Object.keys(STORE_MASTER).sort();
+  const hasInv = new Set(baseData.filter(r => r.sourceType !== 'grn').map(r => r.store));
+  const hasGrn = new Set(baseData.filter(r => r.sourceType === 'grn').map(r => r.store));
+  const invCount = allStores.filter(s => hasInv.has(s)).length;
+  const grnCount = allStores.filter(s => hasGrn.has(s)).length;
+  const neitherCount = allStores.filter(s => !hasInv.has(s) && !hasGrn.has(s)).length;
+  if(sub) sub.textContent = isCircleHeadUser() ? `(${allStores.length} stores in your circle${myAssignedCircles.length===1?'':'s'})` : `(${allStores.length} stores in master list)`;
+  strip.innerHTML = `
+    <div class="readiness-item"><span class="readiness-item-value">${invCount}/${allStores.length}</span><span class="readiness-item-label">Have Inventory</span></div>
+    <div class="readiness-item"><span class="readiness-item-value">${grnCount}/${allStores.length}</span><span class="readiness-item-label">Have GRN Pending</span></div>
+    <div class="readiness-item ${neitherCount>0?'readiness-item-warn':''}"><span class="readiness-item-value">${neitherCount}</span><span class="readiness-item-label">Have neither yet</span></div>`;
+  body.innerHTML = allStores.length ? allStores.map(s => {
+    const inv = hasInv.has(s), grn = hasGrn.has(s);
+    const status = inv && grn ? '<span class="badge badge-match">Ready</span>'
+      : (inv || grn) ? '<span class="badge badge-excess">Partial</span>'
+      : '<span class="badge badge-short">Not set up</span>';
+    return `<tr><td>${s}</td><td>${circleFor(s)}</td><td>${inv?'✓':'—'}</td><td>${grn?'✓':'—'}</td><td>${status}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty-note">No circle assigned yet — contact your admin.</td></tr>';
 }
 
 // A store can be locked (audit submitted) while base_serials has zero rows
@@ -1565,24 +1763,34 @@ function sanitizeStoreId(store){ return String(store).replace(/[^a-z0-9]/gi, '_'
 // they never drift out of sync. Safe to call whenever storeLocks or baseData
 // change, from any screen (guards on element existence for whichever isn't mounted).
 function refreshMissingBaseDataNotice(){
-  const missing = computeMissingBaseDataStores();
+  // Circle heads only see their own circle's missing-base-data rows on Setup —
+  // matches the same scoping their base-data upload rights are enforced with.
+  const missingAll = computeMissingBaseDataStores();
+  const missing = isCircleHeadUser() ? missingAll.filter(s => myAssignedCircles.includes(circleFor(s))) : missingAll;
+
+  // The bell is circle-head-only now (admin's approval UI moved to the
+  // dedicated Approvals page) — it's purely a "you have submissions to
+  // review" counter, not a missing-base-data indicator.
+  const pendingApprovals = isCircleHeadUser()
+    ? storeLocks.filter(l => l.approvalStatus === 'pending' && myAssignedCircles.includes(circleFor(l.store)))
+    : [];
 
   const bellBadge = document.getElementById('topbarBellBadge');
   const bellBtn = document.getElementById('topbarBellBtn');
   if(bellBadge){
-    if(missing.length > 0){ bellBadge.style.display = 'flex'; bellBadge.textContent = missing.length > 99 ? '99+' : missing.length; }
+    if(pendingApprovals.length > 0){ bellBadge.style.display = 'flex'; bellBadge.textContent = pendingApprovals.length > 99 ? '99+' : pendingApprovals.length; }
     else{ bellBadge.style.display = 'none'; }
   }
-  if(bellBtn) bellBtn.title = missing.length ? `${missing.length} store${missing.length===1?'':'s'} submitted with no base data set up` : 'Notifications';
+  if(bellBtn) bellBtn.title = pendingApprovals.length ? `${pendingApprovals.length} submission${pendingApprovals.length===1?'':'s'} awaiting your review` : 'Notifications';
 
   const dropdownList = document.getElementById('notifDropdownList');
   if(dropdownList){
-    dropdownList.innerHTML = missing.length
-      ? missing.map(s => `<div class="notif-item">
-          <div class="notif-item-body"><b>${s}</b><span>Circle ${circleFor(s)} · audit submitted, base data never set up</span></div>
-          <button class="btn" onclick="goFixMissingBaseData('${s.replace(/'/g,"\\'")}')">Fix in Setup</button>
+    dropdownList.innerHTML = pendingApprovals.length
+      ? pendingApprovals.map(l => `<div class="notif-item">
+          <div class="notif-item-body"><b>${l.store}</b><span>Circle ${circleFor(l.store)} · submitted by ${l.lockedByEmail||'—'}, awaiting your review</span></div>
+          <button class="btn" onclick="closeNotifDropdown();showStep('approvals');">Review</button>
         </div>`).join('')
-      : '<div class="empty-note">No urgent items — every submitted store has base data on file.</div>';
+      : '<div class="empty-note">No pending approvals in your circle right now.</div>';
   }
 
   const panel = document.getElementById('missingBaseDataPanel');
@@ -1591,13 +1799,52 @@ function refreshMissingBaseDataNotice(){
   if(panel && list){
     panel.style.display = missing.length ? 'block' : 'none';
     if(countEl) countEl.textContent = missing.length;
+    [...selectedMissingBaseStores].forEach(s => { if(!missing.includes(s)) selectedMissingBaseStores.delete(s); });
     list.innerHTML = missing.map(s => `<div class="missing-base-row" id="missing-base-row-${sanitizeStoreId(s)}">
+        <label class="missing-base-row-check"><input type="checkbox" ${selectedMissingBaseStores.has(s)?'checked':''} onchange="toggleMissingBaseSelect('${s.replace(/'/g,"\\'")}', this.checked)"></label>
         <div class="missing-base-row-info"><b>${s}</b><span>Circle ${circleFor(s)} · audit submitted, no Inventory or GRN data on file</span></div>
         <div class="missing-base-row-actions">
           <button class="btn" onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','inventory')">Declare 0 Inventory</button>
           <button class="btn" onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','grn')">Declare 0 GRN Pending</button>
         </div>
       </div>`).join('');
+    updateMissingBaseDataBulkBar();
+  }
+}
+
+let selectedMissingBaseStores = new Set();
+function toggleMissingBaseSelect(store, checked){
+  if(checked) selectedMissingBaseStores.add(store); else selectedMissingBaseStores.delete(store);
+  updateMissingBaseDataBulkBar();
+}
+function clearMissingBaseDataSelection(){
+  selectedMissingBaseStores.clear();
+  document.querySelectorAll('#missingBaseDataList input[type="checkbox"]').forEach(cb => cb.checked = false);
+  updateMissingBaseDataBulkBar();
+}
+function updateMissingBaseDataBulkBar(){
+  const bar = document.getElementById('missingBaseDataBulkBar');
+  const countEl = document.getElementById('missingBaseDataSelectedCount');
+  if(!bar) return;
+  bar.style.display = selectedMissingBaseStores.size ? 'flex' : 'none';
+  if(countEl) countEl.textContent = selectedMissingBaseStores.size;
+}
+async function bulkDeclareZeroStock(sourceType){
+  if(!requireCycle()) return;
+  const stores = [...selectedMissingBaseStores];
+  if(!stores.length) return;
+  try{
+    const payload = stores.map(s => ({ cycle_id: currentCycleId, store_code: s, serial_no: '', source_type: sourceType }));
+    const { error } = await sb.from('base_serials').insert(payload);
+    if(error) throw error;
+    selectedMissingBaseStores.clear();
+    await fetchCycleData();
+    renderBaseTable();
+    populateStoreSelect();
+    showMessage(`Declared 0 ${sourceType==='grn' ? 'GRN pending' : 'Inventory'} stock for ${stores.length} store${stores.length===1?'':'s'}.`);
+  }catch(e){
+    console.error(e);
+    showMessage('Could not save: ' + errMsg(e), true);
   }
 }
 
@@ -1825,6 +2072,118 @@ async function removeScan(id){
   }
 }
 
+// Simplified, read-only status view for auditors — just their own assigned
+// stores, not the full admin dashboard (which stays off-limits so an
+// auditor never sees another store's "expected" list before scanning it).
+// Once a cycle is completed, their own store's match results show up here
+// too — safe by then, since the store is already locked and submitted.
+// Dedicated review page for a circle head — every pending submission in
+// their circle(s), with the full variance (not just a count) so they can
+// actually review before signing off, plus a short history of what they've
+// already decided. Admin no longer has an approval panel on Overview —
+// this page is the only place approvals happen now; admin sees the outcome
+// via the store card badges and the exported Remarks column.
+function renderApprovalsPage(){
+  reconcile(); // make sure detailResults reflects the latest scans before showing variance
+  const relevantLocks = isCircleHeadUser()
+    ? storeLocks.filter(l => myAssignedCircles.includes(circleFor(l.store)))
+    : storeLocks.slice();
+  const pending = relevantLocks.filter(l => l.approvalStatus === 'pending');
+  const reviewed = relevantLocks.filter(l => l.approvalStatus !== 'pending')
+    .sort((a,b) => new Date(b.approvedAt||0) - new Date(a.approvedAt||0));
+
+  const countEl = document.getElementById('approvalsPageCount');
+  if(countEl) countEl.textContent = pending.length;
+
+  const listEl = document.getElementById('approvalsPageList');
+  if(listEl){
+    listEl.innerHTML = pending.length ? pending.map(l => {
+      const sid = sanitizeStoreId(l.store);
+      const rows = detailResults.filter(r => r.store === l.store);
+      const m = rows.filter(r=>r.status==='match').length;
+      const sh = rows.filter(r=>r.status==='short').length;
+      const ex = rows.filter(r=>r.status==='excess').length;
+      const t = rows.length;
+      const pct = t ? (m/t*100) : 100;
+      const varianceRows = rows.filter(r => r.status !== 'match');
+      const varianceTable = varianceRows.length ? `
+        <div class="table-wrap" style="margin-top:10px;">
+          <table>
+            <thead><tr><th>SKU</th><th>Serial</th><th>Source</th><th>ASN</th><th>Status</th></tr></thead>
+            <tbody>${varianceRows.map(r => `<tr><td>${r.sku||'—'}</td><td>${r.systemSerial||r.physicalSerial||'—'}</td><td>${sourceLabelFor(r)}</td><td>${r.asn||'—'}</td><td><span class="badge badge-${r.status}">${r.status.charAt(0).toUpperCase()+r.status.slice(1)}</span></td></tr>`).join('')}</tbody>
+          </table>
+        </div>` : '<p class="hint" style="margin-top:8px;">No variance — every expected serial was matched.</p>';
+      return `<div class="approval-row" style="flex-direction:column;align-items:stretch;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;">
+          <div class="approval-row-info">
+            <b>${l.store}</b><span>Circle ${circleFor(l.store)} · submitted by ${l.lockedByEmail||'—'} · ${l.lockedAt}</span>
+            <span>Match <b>${pct.toFixed(1)}%</b> · Short <b>${sh}</b> · Excess <b>${ex}</b> · Expected ${m+sh}</span>
+          </div>
+          <div class="approval-row-actions">
+            <textarea id="approval-remark-${sid}" placeholder="Optional remark (e.g. reason for rejection) — carries through to the exported report"></textarea>
+            <div class="btn-row">
+              <button class="btn btn-primary" onclick="submitApproval('${l.store.replace(/'/g,"\\'")}','approved')">Approve</button>
+              <button class="btn btn-danger" onclick="submitApproval('${l.store.replace(/'/g,"\\'")}','rejected')">Reject</button>
+              <button class="btn" onclick="unlockStore('${l.store.replace(/'/g,"\\'")}')" title="Reopen this store for the auditor to edit">Unlock</button>
+            </div>
+          </div>
+        </div>
+        ${varianceTable}
+      </div>`;
+    }).join('') : '<div class="empty-note">No pending approvals right now.</div>';
+  }
+
+  const historyEl = document.getElementById('approvalsPageHistory');
+  if(historyEl){
+    historyEl.innerHTML = reviewed.length ? reviewed.slice(0, 20).map(l => `
+      <div class="missing-base-row">
+        <div class="missing-base-row-info"><b>${l.store}</b><span>Circle ${circleFor(l.store)} · ${l.approvedByEmail||'—'} · ${l.approvedAt||'—'}${l.approvalRemark ? ' · "'+l.approvalRemark+'"' : ''}</span></div>
+        <span class="badge badge-${l.approvalStatus}">${l.approvalStatus.charAt(0).toUpperCase()+l.approvalStatus.slice(1)}</span>
+      </div>`).join('') : '<div class="empty-note">Nothing reviewed yet this cycle.</div>';
+  }
+}
+
+function renderMyStoresView(){
+  const grid = document.getElementById('myStoresGrid');
+  const countEl = document.getElementById('myStoresCount');
+  if(!grid) return;
+  const myStores = myAssignedStores.slice().sort();
+  if(countEl) countEl.textContent = myStores.length ? `(${myStores.length})` : '';
+  if(!myStores.length){ grid.innerHTML = '<div class="empty-note">No stores assigned yet — contact your admin.</div>'; return; }
+  grid.innerHTML = myStores.map(store => {
+    const lock = getStoreLock(store);
+    let statusBadge, statusNote;
+    if(!lock){
+      const scans = scanData.filter(r => r.store === store).length;
+      statusBadge = '<span class="badge badge-excess">Not submitted</span>';
+      statusNote = scans ? `${scans} scanned so far — not yet submitted` : 'Not started yet';
+    } else if(lock.approvalStatus === 'rejected'){
+      statusBadge = '<span class="badge badge-rejected">Rejected</span>';
+      statusNote = lock.approvalRemark ? `Remark: ${lock.approvalRemark}` : 'Rejected — awaiting your admin to unlock for correction';
+    } else if(lock.approvalStatus === 'approved'){
+      statusBadge = '<span class="badge badge-approved">Approved</span>';
+      statusNote = `Submitted ${lock.lockedAt}`;
+    } else {
+      statusBadge = '<span class="badge badge-pending">Submitted — pending review</span>';
+      statusNote = `Submitted ${lock.lockedAt}`;
+    }
+    let resultLine = '';
+    if(auditCompleted && lock){
+      const rows = detailResults.filter(r => r.store === store);
+      const m = rows.filter(r=>r.status==='match').length;
+      const t = rows.length;
+      const pct = t ? (m/t*100) : 100;
+      resultLine = `<div class="store-tag-stats"><span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${rows.filter(r=>r.status==='short').length}</b></span><span>Excess <b>${rows.filter(r=>r.status==='excess').length}</b></span></div>`;
+    }
+    return `<div class="store-tag" style="cursor:default;">
+      <div class="store-tag-body">
+      <p class="store-tag-name">${store} ${statusBadge}</p>
+      <p class="store-tag-meta">Circle ${circleFor(store)} · ${statusNote}</p>
+      ${resultLine}
+      </div></div>`;
+  }).join('');
+}
+
 function renderScanView(){
   populateStoreSelect();
   updateOfflineBanner();
@@ -1860,10 +2219,7 @@ function renderScanView(){
   if(scanZone){ scanZone.style.opacity = inputsDisabled ? '0.5' : '1'; scanZone.style.pointerEvents = inputsDisabled ? 'none' : 'auto'; }
 
   const completeBtn = document.getElementById('completeAuditBtn');
-  if(isAdmin){
-    completeBtn.textContent = 'Complete audit & build dashboard';
-    completeBtn.disabled = false;
-  } else {
+  if(completeBtn){
     completeBtn.textContent = locked ? 'Store already submitted' : 'Submit & lock this store\u2019s audit';
     completeBtn.disabled = !store || locked;
   }
@@ -1892,6 +2248,8 @@ async function unlockStore(store){
       await fetchCycleData();
       showMessage(`${store} has been unlocked.`);
       renderScanView();
+      renderDashboard();
+      renderApprovalsPage();
       refreshMissingBaseDataNotice();
     }catch(e){
       console.error(e);
@@ -1900,44 +2258,53 @@ async function unlockStore(store){
   });
 }
 
-function completeAudit(){
-  if(!requireCycle()) return;
-
-  const isAdmin = currentProfile && currentProfile.role === 'admin';
-
-  if(!isAdmin){
-    const store = document.getElementById('scanStoreSelect').value;
-    if(!store){ showMessage('Select a store first.', true); return; }
-    if(getStoreLock(store)){ showMessage(`${store} is already submitted and locked.`, true); return; }
-    confirmAction('user-complete', `This locks ${store} — no further edits until an admin reopens it`, async () => {
-      try{
-        const { error } = await sb.from('store_locks').insert({
-          cycle_id: currentCycleId, store_code: store, locked_by: currentUser.id, locked_by_email: currentUser.email
-        });
-        if(error) throw error;
-        await fetchCycleData();
-        showMessage(`${store} submitted and locked. Your admin will finalize the full audit once every store is done.`);
-        renderScanView();
-        refreshMissingBaseDataNotice();
-      }catch(e){
-        console.error(e);
-        showMessage('Could not submit this store: ' + errMsg(e), true);
-      }
-    });
-    return;
+// A circle head (or admin) approves/rejects a submitted store with an
+// optional remark. This is a review layer only — it never blocks the
+// submitted scan data from counting in the numbers, and an admin can always
+// see/override the same status regardless of what a circle head decided.
+async function submitApproval(store, status){
+  const sid = sanitizeStoreId(store);
+  const remarkEl = document.getElementById('approval-remark-'+sid);
+  const remark = remarkEl ? remarkEl.value.trim() : '';
+  try{
+    const { error } = await sb.from('store_locks').update({
+      approval_status: status,
+      approved_by: currentUser ? currentUser.id : null,
+      approved_by_email: currentUser ? currentUser.email : null,
+      approved_at: new Date().toISOString(),
+      approval_remark: remark || null
+    }).eq('cycle_id', currentCycleId).eq('store_code', store);
+    if(error) throw error;
+    await fetchCycleData();
+    showMessage(`${store} marked ${status}.`);
+    renderApprovalsPage();
+    refreshMissingBaseDataNotice();
+    const activeView = document.querySelector('.panel-view.active');
+    if(activeView && activeView.id === 'view-dashboard') renderDashboard();
+  }catch(e){
+    console.error(e);
+    showMessage('Could not save approval: ' + errMsg(e), true);
   }
+}
 
-  if(!baseData.length){ showMessage('Upload base data in step 1 before completing the audit.', true); return; }
-  confirmAction('complete-audit', 'This will lock in results for the dashboard', async () => {
+function submitCurrentStore(){
+  if(!requireCycle()) return;
+  const store = document.getElementById('scanStoreSelect').value;
+  if(!store){ showMessage('Select a store first.', true); return; }
+  if(getStoreLock(store)){ showMessage(`${store} is already submitted and locked.`, true); return; }
+  confirmAction('user-complete', `This locks ${store} — no further edits until an admin or circle head reopens it`, async () => {
     try{
-      const { error } = await sb.from('audit_cycles').update({completed:true, completed_at:new Date().toISOString()}).eq('id', currentCycleId);
+      const { error } = await sb.from('store_locks').insert({
+        cycle_id: currentCycleId, store_code: store, locked_by: currentUser.id, locked_by_email: currentUser.email
+      });
       if(error) throw error;
-      auditCompleted = true;
-      showMessage('Audit marked complete. Dashboard is ready below.');
-      showStep('dashboard');
+      await fetchCycleData();
+      showMessage(`${store} submitted and locked. Its circle head will review it next.`);
+      renderScanView();
+      refreshMissingBaseDataNotice();
     }catch(e){
       console.error(e);
-      showMessage('Could not mark the cycle complete in Supabase: ' + errMsg(e), true);
+      showMessage('Could not submit this store: ' + errMsg(e), true);
     }
   });
 }
@@ -1963,44 +2330,181 @@ function reconcile(){
       // (already inward) or GRN pending (physically present, pending inward).
       // Scans are compared against inventory + GRN combined either way; this
       // just tags the result so the export/dashboard can break it back out.
-      detailResults.push({store, sku:r.sku, systemSerial:r.serial, physicalSerial: matched ? r.serial : '', status: matched ? 'match' : 'short', source: r.sourceType === 'grn' ? 'grn' : 'inventory'});
+      detailResults.push({store, sku:r.sku, systemSerial:r.serial, physicalSerial: matched ? r.serial : '', status: matched ? 'match' : 'short', source: r.sourceType === 'grn' ? 'grn' : 'inventory', asn: r.sourceType === 'grn' ? (r.asnNo || '') : ''});
     });
     scanRows.forEach(r => {
-      if(!baseSerials.has(normalizeSerial(r.serial))) detailResults.push({store, sku:r.sku, systemSerial:'', physicalSerial:r.serial, status:'excess', source:''});
+      if(!baseSerials.has(normalizeSerial(r.serial))) detailResults.push({store, sku:r.sku, systemSerial:'', physicalSerial:r.serial, status:'excess', source:'', asn:''});
     });
   });
+}
+
+// Circle-level rollup card — shared by both the admin's drilled-in
+// territory view and a circle head's own Circle Summary, so the two never
+// drift out of sync on what a "circle card" actually shows.
+function renderCircleCards(circles){
+  const cards = circles.slice().sort().map(circle => {
+    const circleAllStores = Object.keys(STORE_MASTER).filter(s => circleFor(s) === circle);
+    const circleAuditedStores = reconciledStores.filter(s => circleFor(s) === circle);
+    const rows = circleAuditedStores.flatMap(s => detailResults.filter(r => r.store === s));
+    const m = rows.filter(r=>r.status==='match').length;
+    const sh = rows.filter(r=>r.status==='short').length;
+    const ex = rows.filter(r=>r.status==='excess').length;
+    const pct = (m+sh+ex) ? (m/(m+sh+ex)*100) : 100;
+    const selected = dashboardCircleFilter === circle;
+    const statsLine = circleAuditedStores.length === 0
+      ? `<span class="circle-rollup-not-started">Not submitted / Not audited yet</span>`
+      : `<span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span>`;
+    return `<div class="circle-rollup-card${selected?' circle-rollup-card-selected':''}" onclick="setDashboardCircleFilter('${selected?'':circle}');document.getElementById('storeGridSection').scrollIntoView({behavior:'smooth'});">
+      <div class="circle-rollup-name">${circle}</div>
+      <div class="circle-rollup-meta">${circleAuditedStores.length}/${circleAllStores.length} stores audited</div>
+      <div class="circle-rollup-stats">${statsLine}</div>
+    </div>`;
+  }).join('');
+  return cards || '<div class="empty-note">No circles to show.</div>';
+}
+
+// Admin-only: one card per Circle Head, aggregated across every circle
+// they're assigned to — plus an "Unassigned" card for any circle with no
+// circle head at all, so nothing silently disappears from view. Clicking a
+// card drills into that person's full territory via renderCircleCards above.
+function renderCircleHeadCards(){
+  if(!circleHeadsCache || !circleHeadsCache.length){
+    const allCircles = [...new Set(Object.values(STORE_MASTER))];
+    return `<div class="empty-note">No Circle Heads set up yet — assign the role and circles from Users &amp; Stores. Showing ${allCircles.length} unassigned circle${allCircles.length===1?'':'s'}.</div>` +
+      `<div class="circle-rollup-card" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})'>
+        <div class="circle-rollup-name">Unassigned</div>
+        <div class="circle-rollup-meta">${allCircles.length} circle${allCircles.length===1?'':'s'} · no Circle Head yet</div>
+      </div>`;
+  }
+  const assignedCircles = new Set(circleHeadsCache.flatMap(h => h.circles));
+  const unassigned = [...new Set(Object.values(STORE_MASTER))].filter(c => !assignedCircles.has(c));
+  const headCards = circleHeadsCache.map(head => {
+    if(!head.circles.length) return '';
+    const headStores = Object.keys(STORE_MASTER).filter(s => head.circles.includes(circleFor(s)));
+    const headAudited = reconciledStores.filter(s => head.circles.includes(circleFor(s)));
+    const rows = headAudited.flatMap(s => detailResults.filter(r => r.store === s));
+    const m = rows.filter(r=>r.status==='match').length;
+    const sh = rows.filter(r=>r.status==='short').length;
+    const ex = rows.filter(r=>r.status==='excess').length;
+    const pct = (m+sh+ex) ? (m/(m+sh+ex)*100) : 100;
+    // 0 audited stores is "hasn't started/submitted yet" — a very different
+    // situation from "100% match", which is what m/sh/ex all being 0 reads
+    // as. Say so plainly instead of implying everything's fine.
+    const statsLine = headAudited.length === 0
+      ? `<span class="circle-rollup-not-started">Not submitted / Not audited yet</span>`
+      : `<span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span>`;
+    return `<div class="circle-rollup-card" onclick='viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})'>
+      <div class="circle-rollup-name">${head.name}</div>
+      <div class="circle-rollup-meta">${head.circles.join(', ')} · ${headAudited.length}/${headStores.length} stores audited</div>
+      <div class="circle-rollup-stats">${statsLine}</div>
+    </div>`;
+  }).join('');
+  const unassignedCard = unassigned.length ? `<div class="circle-rollup-card" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})'>
+      <div class="circle-rollup-name">Unassigned</div>
+      <div class="circle-rollup-meta">${unassigned.join(', ')} · no Circle Head yet</div>
+    </div>` : '';
+  return (headCards + unassignedCard) || '<div class="empty-note">No circle heads or circles to show.</div>';
+}
+
+function viewCircleHeadTerritory(id, name, circles){
+  adminViewingCircleHead = { id, name, circles };
+  dashboardCircleFilter = null;
+  renderDashboard();
+  document.getElementById('circleRollupCard').scrollIntoView({behavior:'smooth'});
+}
+function clearCircleHeadDrill(){
+  adminViewingCircleHead = null;
+  renderDashboard();
+}
+
+async function loadCircleHeadsForAdmin(){
+  try{
+    const [{ data: heads, error: e1 }, { data: assignments, error: e2 }] = await Promise.all([
+      sb.from('profiles').select('id,email,full_name').eq('role','circle_head').eq('approved', true),
+      sb.from('user_circles').select('*')
+    ]);
+    if(e1) throw e1; if(e2) throw e2;
+    circleHeadsCache = (heads || []).map(h => ({
+      id: h.id,
+      name: displayNameFor(h.email, h.full_name),
+      circles: (assignments || []).filter(a => a.user_id === h.id).map(a => a.circle)
+    }));
+    renderDashboard();
+  }catch(e){
+    console.error('Could not load circle heads', e);
+    circleHeadsCache = [];
+    renderDashboard();
+  }
 }
 
 function renderDashboard(){
   reconcile(); // always show live results — "completed" only locks the cycle, it doesn't gate visibility
 
-  const auditedCount = [...new Set(scanData.map(r=>r.store))].filter(Boolean).length;
+  // "Pending"/"submitted" counts come from store_locks, not scanData — store_locks
+  // stays readable regardless of cycle completion status (RLS), while scans/base_serials
+  // for an incomplete cycle read back empty for a client by design. Computing this first
+  // means every "how many stores so far" message below is accurate for every role.
+  const lockedStoreCodes = new Set(storeLocks.map(l => l.store));
+  const pendingStoresEarly = Object.keys(STORE_MASTER).filter(s => !lockedStoreCodes.has(s));
+
+  const auditedCount = isClientUser() ? lockedStoreCodes.size : [...new Set(scanData.map(r=>r.store))].filter(Boolean).length;
+  const greetTitleEl = document.getElementById('greetTitle');
   const greetSub = document.getElementById('greetSub');
-  if(greetSub){
-    if(!currentCycleId){
-      greetSub.textContent = "Load or create an audit cycle to get started.";
-    } else if(!auditCompleted){
-      greetSub.textContent = `Live — ${auditedCount} store${auditedCount===1?'':'s'} scanned so far. Updates instantly as auditors scan.`;
-    } else {
-      greetSub.textContent = `Audit "${document.getElementById('cycleName').value || 'Untitled cycle'}" completed — final results for ${auditedCount} store${auditedCount===1?'':'s'}.`;
+  if(isAppAdmin() && adminViewingCircleHead){
+    // Make the drill-in read as a genuinely different page, not just a
+    // scroll position on the same one — title, subtitle, and every number
+    // below all change together.
+    if(greetTitleEl) greetTitleEl.textContent = `📍 ${adminViewingCircleHead.name}'s Territory`;
+    if(greetSub) greetSub.textContent = `${adminViewingCircleHead.circles.join(', ')} — viewing this Circle Head's stores only.`;
+    const backBanner = document.getElementById('territoryBackBanner');
+    if(backBanner) backBanner.innerHTML = `<button class="btn btn-primary" style="margin-bottom:16px;" onclick="clearCircleHeadDrill()">← Back to full Overview</button>`;
+  } else {
+    if(greetTitleEl) greetTitleEl.textContent = `${greetingWord()}, ${displayNameFor(currentUser.email, currentProfile.full_name)} \ud83d\udc4b`;
+    const backBanner = document.getElementById('territoryBackBanner');
+    if(backBanner) backBanner.innerHTML = '';
+    if(greetSub){
+      if(!currentCycleId){
+        greetSub.textContent = "Load or create an audit cycle to get started.";
+      } else if(!auditCompleted){
+        greetSub.textContent = `Live — ${auditedCount} store${auditedCount===1?'':'s'} submitted so far. Updates instantly as auditors submit.`;
+      } else {
+        greetSub.textContent = `Audit "${document.getElementById('cycleName').value || 'Untitled cycle'}" completed — final results for ${auditedCount} store${auditedCount===1?'':'s'}.`;
+      }
     }
   }
 
   const totalBaseStores = [...new Set(baseData.map(r=>r.store))].filter(Boolean);
   const auditedStores = [...new Set(scanData.map(r=>r.store))].filter(Boolean);
   const storesRecorded = auditedStores.length;
+
+  // Base role/drill scope — which stores this view is even allowed to
+  // consider, before any manual filter narrows it further. null = no
+  // restriction. This is what makes an admin's drill into one Circle
+  // Head's territory (or a circle head's own view) actually change every
+  // number on the page, not just the store-card grid below.
+  let roleScopedStores = null;
+  if(isCircleHeadUser()) roleScopedStores = new Set(Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))));
+  if(isAppAdmin() && adminViewingCircleHead) roleScopedStores = new Set(Object.keys(STORE_MASTER).filter(s => adminViewingCircleHead.circles.includes(circleFor(s))));
+
   // "Pending" is measured against the full store master list minus whatever's
   // actually been locked/submitted — not against which stores happen to have
   // base data uploaded, since a store can be legitimately audited (locked)
   // with zero expected/scanned items.
-  const lockedStoreCodes = new Set(storeLocks.map(l => l.store));
-  const pendingStores = Object.keys(STORE_MASTER).filter(s => !lockedStoreCodes.has(s));
+  const pendingStores = roleScopedStores ? pendingStoresEarly.filter(s => roleScopedStores.has(s)) : pendingStoresEarly;
   const storesPending = pendingStores.length;
 
-  // Everything below (hero cards, health donut, live activity) scopes to dashboardStoreFilter
-  // when one is set — via a store-card click, the Filters dropdown, or a store match in the topbar search.
-  const scopedResults = dashboardStoreFilter ? detailResults.filter(r=>r.store===dashboardStoreFilter) : detailResults;
-  const scopedScans = dashboardStoreFilter ? scanData.filter(r=>r.store===dashboardStoreFilter) : scanData;
+  // Everything below (hero cards, health donut, live activity) scopes to the
+  // role/drill scope above, further narrowed by dashboardStoreFilter or
+  // dashboardCircleFilter when one is set — via a store-card click, the
+  // circle dropdown, the Filters dropdown, or a store match in the topbar search.
+  const manualScopeStores = dashboardStoreFilter ? [dashboardStoreFilter]
+    : dashboardCircleFilter ? Object.keys(STORE_MASTER).filter(s => circleFor(s) === dashboardCircleFilter)
+    : null;
+  const effectiveScope = manualScopeStores
+    ? (roleScopedStores ? manualScopeStores.filter(s => roleScopedStores.has(s)) : manualScopeStores)
+    : (roleScopedStores ? [...roleScopedStores] : null);
+  const scopedResults = effectiveScope ? detailResults.filter(r => effectiveScope.includes(r.store)) : detailResults;
+  const scopedScans = effectiveScope ? scanData.filter(r => effectiveScope.includes(r.store)) : scanData;
   const totalScanned = scopedScans.length;
 
   const total = scopedResults.length;
@@ -2043,6 +2547,18 @@ function renderDashboard(){
   // zero-stock store — one with nothing to match, nothing short, nothing excess —
   // still shows up here instead of silently vanishing from the dashboard.
   let stores = reconciledStores.slice();
+  // A circle head only ever sees their own circle's stores on this page —
+  // RLS already stops their base_serials/scans reads at the DB level, this
+  // just keeps the store list/cards in sync with that on the client too.
+  if(isCircleHeadUser()) stores = stores.filter(s => myAssignedCircles.includes(circleFor(s)));
+  // Admin drilled into one Circle Head's territory from the summary card —
+  // scope everything below (KPIs, store grid, detail table) to just their circles too.
+  if(isAppAdmin() && adminViewingCircleHead) stores = stores.filter(s => adminViewingCircleHead.circles.includes(circleFor(s)));
+  // A client viewing a still-live (not yet completed) cycle gets nothing
+  // back for base_serials/scans by RLS design — full match/short/excess
+  // detail is reserved for completed cycles. This flag just drives a
+  // friendlier "cycle in progress" message instead of a blank dashboard.
+  const clientLiveGate = isClientUser() && !auditCompleted;
   // Worst-variance-first so problem stores surface immediately, not buried alphabetically
   stores.sort((a,b) => {
     const va = detailResults.filter(r=>r.store===a && r.status!=='match').length;
@@ -2093,7 +2609,13 @@ function renderDashboard(){
       icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v6"/><path d="m8 7 4-4 4 4"/><path d="M4 21h16"/><path d="M4 21v-6h16v6"/></svg>',
       spark: sparklineBarsSVG(varianceTrend, cRed, true) }
   ];
-  document.getElementById('kpiStrip').innerHTML = kpiCards.map(k => `
+  const kpiCardsFinal = clientLiveGate
+    ? [{ cls:'k-pending', label:'Audit Progress', value: `${lockedStoreCodes.size}/${Object.keys(STORE_MASTER).length}`, sub:'Stores submitted so far',
+        trend:'flat', trendLabel: 'Live cycle — detail on completion',
+        icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
+        spark: sparklineBarsSVG(pendingTrend, cAmber, true) }]
+    : kpiCards;
+  document.getElementById('kpiStrip').innerHTML = kpiCardsFinal.map(k => `
     <div class="kpi ${k.cls}"${k.cls==='k-pending' ? ' onclick="showPendingStoresPanel()" style="cursor:pointer;" title="Click to see which stores are pending"' : ''}>
       <div class="kpi-top"><span class="kpi-icon">${k.icon}</span><span class="kpi-trend ${k.trend}">${k.trend==='up'?'\u2191':k.trend==='down'?'\u2193':'\u2192'} ${k.trendLabel}</span></div>
       <p class="kpi-value">${k.value}</p>
@@ -2119,14 +2641,49 @@ function renderDashboard(){
       : (ex>0 || m<t ? '<span class="stamp stamp-variance">Variance</span>' : '<span class="stamp stamp-match">Matched</span>');
     const isFiltered = dashboardStoreFilter === store;
     const grnNote = grnExpected ? ` · GRN pending ${grnMatched}/${grnExpected}` : '';
+    const lock = getStoreLock(store);
+    const approvalBadge = lock ? `<span class="badge badge-${lock.approvalStatus}" title="${lock.approvalRemark ? 'Remark: '+lock.approvalRemark : ''}">${lock.approvalStatus.charAt(0).toUpperCase()+lock.approvalStatus.slice(1)}</span>` : '';
     return `<div class="store-tag${isFiltered?' store-tag-selected':''}" onclick="setDashboardStoreFilter('${store.replace(/'/g,"\\'")}')" title="Click to filter the detail table below to this store">
       <span class="store-download" onclick="event.stopPropagation();downloadStoreExcel('${store.replace(/'/g,"\\'")}')" title="Download this store's report">↓ Export</span>
       <div class="store-tag-body">
-      <p class="store-tag-name">${store}</p>
+      <p class="store-tag-name">${store} ${approvalBadge}</p>
       <p class="store-tag-meta">Circle ${circleFor(store)} · Expected ${t-ex} · Found ${t-sh}${grnNote}</p>
       <div class="store-tag-stats"><span>Match <b>${pct.toFixed(2)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span></div>
       ${stamp}</div></div>`;
-  }).join('') : `<div class="empty-note">${dashboardCircleFilter ? `No audited stores in ${dashboardCircleFilter} yet.` : 'No stores scanned yet — complete at least one store in Scan / Upload to see results here.'}</div>`;
+  }).join('') : `<div class="empty-note">${clientLiveGate ? `Cycle in progress — ${lockedStoreCodes.size} of ${Object.keys(STORE_MASTER).length} stores submitted so far. Full results appear here once the cycle is marked complete.` : dashboardCircleFilter ? `No audited stores in ${dashboardCircleFilter} yet.` : 'No stores scanned yet — complete at least one store in Scan / Upload to see results here.'}</div>`;
+
+  // ---- Circle Summary / Circle Head Summary rollup ----
+  // Admin sees cards grouped by the PERSON managing a circle (Circle Head
+  // Summary) — clicking drills into that person's whole territory, which can
+  // span several circles. A circle head sees their own circles directly
+  // (Circle Summary), same as before, each still clickable down to the
+  // store-card grid below. Either way this stays out of the client's view —
+  // it's an operational tool, not something a client needs.
+  const rollupEl = document.getElementById('circleRollupGrid');
+  const rollupTitleEl = document.getElementById('circleRollupTitle');
+  const drillBannerEl = document.getElementById('circleDrillBanner');
+  if(rollupEl){
+    if(clientLiveGate){
+      rollupEl.innerHTML = `<div class="empty-note">Circle-level detail appears once this cycle is marked complete.</div>`;
+    } else if(isAppAdmin() && !adminViewingCircleHead){
+      if(rollupTitleEl) rollupTitleEl.textContent = 'Circle Head Summary';
+      if(drillBannerEl) drillBannerEl.innerHTML = '';
+      if(circleHeadsCache === null){
+        rollupEl.innerHTML = '<div class="empty-note">Loading circle heads…</div>';
+        loadCircleHeadsForAdmin();
+      } else {
+        rollupEl.innerHTML = renderCircleHeadCards();
+      }
+    } else if(isAppAdmin() && adminViewingCircleHead){
+      if(rollupTitleEl) rollupTitleEl.textContent = `${adminViewingCircleHead.name}'s Territory`;
+      if(drillBannerEl) drillBannerEl.innerHTML = `<button class="btn" style="margin-bottom:14px;" onclick="clearCircleHeadDrill()">← Back to Circle Head Summary</button>`;
+      rollupEl.innerHTML = renderCircleCards(adminViewingCircleHead.circles);
+    } else if(isCircleHeadUser()){
+      if(rollupTitleEl) rollupTitleEl.textContent = 'Circle Summary';
+      if(drillBannerEl) drillBannerEl.innerHTML = '';
+      rollupEl.innerHTML = renderCircleCards(myAssignedCircles);
+    }
+  }
 
   // ---- Stores Pending Audit panel ----
   // Every master-list store not yet locked/submitted — the flip side of the
@@ -2308,6 +2865,19 @@ function sourceLabelFor(r){
   return r.source === 'grn' ? 'GRN Pending' : r.source === 'inventory' ? 'Inventory' : '—';
 }
 
+// The community/free build of SheetJS (loaded via CDN here) can't write a
+// native Excel "Insert > Table" object with banded-row styling — that's a
+// Pro-only feature. What it CAN do is a real AutoFilter range, which gives
+// the same sort/filter dropdown arrows on the header row that a Table
+// provides; that's what this adds. (Anyone who wants the full banded-table
+// look can still select the range in Excel and hit Ctrl+T themselves —
+// the filter arrows this sets don't conflict with that.)
+function applyAutoFilter(ws, numDataRows, numCols){
+  if(!numDataRows) return;
+  const lastCol = XLSX.utils.encode_col(numCols - 1);
+  ws['!autofilter'] = { ref: `A1:${lastCol}${numDataRows + 1}` };
+}
+
 function buildDetailRowsForExcel(rows){
   return rows.map((r,i) => ({
     'Sr. No.': i+1,
@@ -2315,6 +2885,7 @@ function buildDetailRowsForExcel(rows){
     'SKU': r.sku || '',
     'Physical scan serial number': r.physicalSerial || '',
     'Source': sourceLabelFor(r),
+    'ASN Number': r.asn || '',
     'Match': r.status==='match' ? 'Match' : '',
     'Excess': r.status==='excess' ? 'Excess' : '',
     'Short': r.status==='short' ? 'Short' : ''
@@ -2360,7 +2931,8 @@ function downloadBaseTemplate(){
     ['ItemNo', 'SKU / item code. Optional — leave blank if you don\'t track it, matching only needs the serial.'],
     ['SerialNo', 'The unit serial to reconcile against physical scans. "Serial Number", "ItemSerialNo" or "IMEI" also work as column names.'],
     ['', ''],
-    ['Uploading GRN Pending stock?', 'Same format — this app also recognizes GRN/ASN report headers directly: "Client" for store, "ItemNo" for SKU, "ItemSerialNo" or "BoxIDSerial" for serial. Just pick "GRN Stock (Pending Inward)" before uploading.'],
+    ['Uploading GRN Pending stock?', 'Same format — this app also recognizes GRN/ASN report headers directly: "Client" for store, "ItemNo" for SKU, "ItemSerialNo" or "BoxIDSerial" for serial, "ASNNo" for the order number, "GRNNo" for GRN status. Just pick "GRN Stock (Pending Inward)" before uploading.'],
+    ['GRNNo column (GRN uploads only)', 'If your file has a GRNNo column, only rows with it left BLANK are kept as GRN Pending — a filled GRNNo means that serial has already been GRN\'d/inward (it\'s Inventory now), so those rows are automatically skipped.'],
     ['Zero-stock store', 'To declare a store as having ZERO stock (Inventory or GRN, whichever you\'re uploading), add one row with LocationCode filled in and SerialNo left blank.'],
     ['', ''],
     ['Before you upload', 'Delete the 3 example rows on the "Base Data" tab — they\'re only here to show the shape of the file.'],
@@ -2408,7 +2980,8 @@ function downloadExcel(){
       'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
       'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
       'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex,
-      'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00'
+      'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00',
+      Remarks: '' // left blank on purpose — for the admin/reviewer to fill in after reviewing the numbers
     };
   });
 
@@ -2416,6 +2989,7 @@ function downloadExcel(){
     'Sr. No.': i+1, Store:r.store, Circle:circleFor(r.store),
     'System scan serial number': r.systemSerial || '', SKU: r.sku || '', 'Physical scan serial number': r.physicalSerial || '',
     'Source': sourceLabelFor(r),
+    'ASN Number': r.asn || '', // which ASN/order this serial belongs to, for GRN-pending rows — blank for Inventory/Excess
     'Match': r.status==='match' ? 'Match' : '', 'Excess': r.status==='excess' ? 'Excess' : '', 'Short': r.status==='short' ? 'Short' : ''
   }));
   const scanLogRows = scanData.map(r => ({Store:r.store, Circle:circleFor(r.store), SKU:r.sku, 'Serial Number':r.serial, 'Scanned at':r.ts}));
@@ -2427,14 +3001,25 @@ function downloadExcel(){
     .map((r,i) => ({
       'Sr. No.': i+1, Store: r.store, Circle: circleFor(r.store), SKU: r.sku || '',
       'GRN Pending Serial Number': r.systemSerial || '',
+      'ASN Number': r.asn || '',
       'Matched in Physical Scan': r.status === 'match' ? 'Yes' : 'No — still pending'
     }));
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows), 'Detail');
-  if(grnRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(grnRows), 'GRN Pending');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(scanLogRows), 'Scan Log');
+  const summaryWs = XLSX.utils.json_to_sheet(summaryRows);
+  applyAutoFilter(summaryWs, summaryRows.length, 15);
+  XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
+  const detailWs = XLSX.utils.json_to_sheet(detailRows);
+  applyAutoFilter(detailWs, detailRows.length, 11);
+  XLSX.utils.book_append_sheet(wb, detailWs, 'Detail');
+  if(grnRows.length){
+    const grnWs = XLSX.utils.json_to_sheet(grnRows);
+    applyAutoFilter(grnWs, grnRows.length, 7);
+    XLSX.utils.book_append_sheet(wb, grnWs, 'GRN Pending');
+  }
+  const logWs = XLSX.utils.json_to_sheet(scanLogRows);
+  applyAutoFilter(logWs, scanLogRows.length, 5);
+  XLSX.utils.book_append_sheet(wb, logWs, 'Scan Log');
   XLSX.writeFile(wb, `PV_Recon_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
 }
 
@@ -2448,11 +3033,17 @@ function downloadStoreExcel(store){
     'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
     'GRN Pending Expected': grnExpected, 'GRN Pending Matched': grnMatched, 'GRN Pending Short': grnShort,
     'Total Expected':m+sh, 'Total Found':m+ex, Matched:m, Short:sh, Excess:ex,
-    'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00'
+    'Match %': (m+sh+ex) ? ((m/(m+sh+ex))*100).toFixed(2) : '100.00',
+    Remarks: ''
   }];
+  const detailRows = buildDetailRowsForExcel(rows);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buildDetailRowsForExcel(rows)), 'Audit Report');
+  const summaryWs = XLSX.utils.json_to_sheet(summaryRows);
+  applyAutoFilter(summaryWs, summaryRows.length, 15);
+  XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
+  const detailWs = XLSX.utils.json_to_sheet(detailRows);
+  applyAutoFilter(detailWs, detailRows.length, 9);
+  XLSX.utils.book_append_sheet(wb, detailWs, 'Audit Report');
   const safeStore = store.replace(/[^a-z0-9]/gi,'_');
   XLSX.writeFile(wb, `PV_Recon_${safeStore}_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
 }
@@ -2463,7 +3054,7 @@ function resetEverything(){
     stopDashboardPolling();
     currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
     baseData = []; scanData = []; detailResults = []; reconciledStores = []; auditCompleted = false;
-    dashboardStoreFilter = null; dashboardCircleFilter = null;
+    dashboardStoreFilter = null; dashboardCircleFilter = null; adminViewingCircleHead = null;
     document.getElementById('cycleName').value = '';
     setSaveIndicator('session');
     updateCycleLabels();
@@ -2501,7 +3092,6 @@ function wireDropzone(zoneId, inputId){
 setSaveIndicator('session');
 renderBaseTable();
 populateStoreSelect();
-renderDashboard();
 wireDropzone('baseUploadZone', 'baseFileInput');
 
 // Visual selected-state for the Inventory/GRN pill radios (kept independent
@@ -2532,11 +3122,24 @@ wireDropzone('scanUploadZone', 'scanFileInput');
     return;
   }
 
-  const { data: { session } } = await sb.auth.getSession();
-  if(session && session.user){
-    await onLoginSuccess();
-  } else {
+  // Never let a stuck getSession() (paused Supabase project, network issue,
+  // bad URL/key in config.js) leave the loading screen spinning forever with
+  // no explanation — show a real error and the sign-in screen instead. The
+  // timeout below is a backstop for the case where the request just hangs
+  // (no error, no response) rather than failing outright.
+  try{
+    const sessionPromise = sb.auth.getSession();
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for Supabase')), 10000));
+    const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
+    if(session && session.user){
+      await onLoginSuccess();
+    } else {
+      document.getElementById('authScreen').style.display = 'flex';
+    }
+  }catch(e){
+    console.error('Could not reach Supabase on startup:', e);
     document.getElementById('authScreen').style.display = 'flex';
+    setAuthMessage('Could not connect to the server. This usually means the Supabase project is paused, or the URL/key in js/config.js is wrong. Check the browser console for details, then reload.', true);
   }
   document.getElementById('loadingScreen').style.display = 'none';
 
@@ -2549,7 +3152,8 @@ wireDropzone('scanUploadZone', 'scanFileInput');
       return;
     }
     if(event === 'SIGNED_OUT'){
-      currentUser = null; currentProfile = null; myAssignedStores = [];
+      currentUser = null; currentProfile = null; myAssignedStores = []; myAssignedCircles = [];
+      circleHeadsCache = null; adminViewingCircleHead = null;
       document.body.className = '';
       document.getElementById('appRoot').style.display = 'none';
       document.getElementById('pendingScreen').style.display = 'none';
