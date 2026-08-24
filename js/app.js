@@ -524,20 +524,43 @@ let compareTrendChartInstance = null;
 function renderAuditReportPage(){
   if(!currentProfile || currentProfile.role !== 'admin') return;
   reconcile();
+  if(circleHeadsCache === null){ loadCircleHeadsForAdmin(); } // async; re-renders this page once loaded
   const circleSel = document.getElementById('auditReportCircleFilter');
   if(circleSel && circleSel.options.length <= 1){
     const circles = [...new Set(Object.values(STORE_MASTER))].sort();
     circleSel.innerHTML = '<option value="">All circles</option>' + circles.map(c => `<option value="${c}">${c}</option>`).join('');
   }
+  const headSel = document.getElementById('auditReportCircleHeadFilter');
+  if(headSel && circleHeadsCache && circleHeadsCache.length && headSel.options.length <= 1){
+    headSel.innerHTML = '<option value="">All circle heads</option>' + circleHeadsCache.map(h => `<option value="${h.id}">${h.name}</option>`).join('');
+  }
   const search = (document.getElementById('auditReportSearch')?.value || '').trim().toLowerCase();
   const circleFilter = document.getElementById('auditReportCircleFilter')?.value || '';
-  const stores = Object.keys(STORE_MASTER).sort();
-  const rows = stores.map(store => {
+  const circleHeadFilter = headSel?.value || '';
+  const headCircles = circleHeadFilter ? (circleHeadsCache||[]).find(h => h.id === circleHeadFilter)?.circles || [] : null;
+
+  // Scope stores by whichever filters are set — circle head first (a
+  // circle head owns one or more whole circles), then the plain circle
+  // filter on top of that, same combinable pattern as the dashboard rollup.
+  let scopeStores = Object.keys(STORE_MASTER);
+  if(headCircles) scopeStores = scopeStores.filter(s => headCircles.includes(circleFor(s)));
+  if(circleFilter) scopeStores = scopeStores.filter(s => circleFor(s) === circleFilter);
+  scopeStores = scopeStores.sort();
+
+  // "Submitted" = has a store_locks row at all (pending/approved/rejected,
+  // doesn't matter) — same definition the sidebar's own progress widget
+  // uses, so the two never disagree on what counts as done.
+  const completedInScope = scopeStores.filter(s => storeLocks.some(l => l.store === s));
+  const pct = scopeStores.length ? Math.round((completedInScope.length / scopeStores.length) * 100) : 0;
+  const pctEl = document.getElementById('auditReportProgressPct'); if(pctEl) pctEl.textContent = pct + '%';
+  const fillEl = document.getElementById('auditReportProgressFill'); if(fillEl) fillEl.style.width = pct + '%';
+  const subEl = document.getElementById('auditReportProgressSub'); if(subEl) subEl.textContent = `${completedInScope.length} / ${scopeStores.length} stores submitted`;
+
+  const rows = scopeStores.map(store => {
     const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
     const approval = storeApprovalInfo(store);
     return { store, circle: circleFor(store), invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex, approval };
   }).filter(r => {
-    if(circleFilter && r.circle !== circleFilter) return false;
     if(!search) return true;
     return r.store.toLowerCase().includes(search) || r.circle.toLowerCase().includes(search) || (r.approval.remark||'').toLowerCase().includes(search);
   });
@@ -562,7 +585,15 @@ function downloadAuditReportExcel(){
   if(!currentProfile || currentProfile.role !== 'admin') return;
   reconcile();
   const cycle = document.getElementById('cycleName').value || 'Untitled_Cycle';
-  const stores = Object.keys(STORE_MASTER).sort();
+  // Export exactly what's currently on screen — same circle/circle-head
+  // filter, so a filtered view doesn't quietly download everyone's data.
+  const circleFilter = document.getElementById('auditReportCircleFilter')?.value || '';
+  const circleHeadFilter = document.getElementById('auditReportCircleHeadFilter')?.value || '';
+  const headCircles = circleHeadFilter ? (circleHeadsCache||[]).find(h => h.id === circleHeadFilter)?.circles || [] : null;
+  let stores = Object.keys(STORE_MASTER);
+  if(headCircles) stores = stores.filter(s => headCircles.includes(circleFor(s)));
+  if(circleFilter) stores = stores.filter(s => circleFor(s) === circleFilter);
+  stores = stores.sort();
   const rows = stores.map(store => {
     const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
     const approval = storeApprovalInfo(store);
@@ -582,7 +613,9 @@ function downloadAuditReportExcel(){
   const ws = XLSX.utils.json_to_sheet(rows);
   applyAutoFilter(ws, rows.length, 18);
   XLSX.utils.book_append_sheet(wb, ws, 'Audit Report');
-  XLSX.writeFile(wb, `Audit_Report_${cycle.replace(/[^a-z0-9]/gi,'_')}.xlsx`);
+  const headName = circleHeadFilter ? (circleHeadsCache||[]).find(h => h.id === circleHeadFilter)?.name : '';
+  const suffix = (headName ? `_${headName}` : circleFilter ? `_${circleFilter}` : '').replace(/[^a-z0-9_]/gi,'_');
+  XLSX.writeFile(wb, `Audit_Report_${cycle.replace(/[^a-z0-9]/gi,'_')}${suffix}.xlsx`);
 }
 
 async function renderCycleComparison(){
@@ -2486,15 +2519,25 @@ async function submitApproval(store, status){
   const sid = sanitizeStoreId(store);
   const remarkEl = document.getElementById('approval-remark-'+sid);
   const remark = remarkEl ? remarkEl.value.trim() : '';
+  const baseUpdate = {
+    approval_status: status,
+    approved_by: currentUser ? currentUser.id : null,
+    approved_by_email: currentUser ? currentUser.email : null,
+    approved_at: new Date().toISOString(),
+    approval_remark: remark || null
+  };
   try{
-    const { error } = await sb.from('store_locks').update({
-      approval_status: status,
-      approved_by: currentUser ? currentUser.id : null,
-      approved_by_email: currentUser ? currentUser.email : null,
-      approved_by_name: currentUser ? displayNameFor(currentUser.email, currentProfile && currentProfile.full_name) : null,
-      approved_at: new Date().toISOString(),
-      approval_remark: remark || null
+    let { error } = await sb.from('store_locks').update({
+      ...baseUpdate,
+      approved_by_name: currentUser ? displayNameFor(currentUser.email, currentProfile && currentProfile.full_name) : null
     }).eq('cycle_id', currentCycleId).eq('store_code', store);
+    // approved_by_name only exists after supabase/add_approver_name_to_locks.sql
+    // has been run — if it hasn't yet, don't let a missing reporting column
+    // block the actual approval; fall back to saving without it (the report
+    // just won't have a name for this one until the migration runs).
+    if(error && /approved_by_name/i.test(error.message || '')){
+      ({ error } = await sb.from('store_locks').update(baseUpdate).eq('cycle_id', currentCycleId).eq('store_code', store));
+    }
     if(error) throw error;
     await fetchCycleData();
     showMessage(`${store} marked ${status}.`);
@@ -2663,12 +2706,15 @@ async function loadCircleHeadsForAdmin(){
       name: displayNameFor(h.email, h.full_name),
       circles: (assignments || []).filter(a => a.user_id === h.id).map(a => a.circle)
     }));
-    renderDashboard();
   }catch(e){
     console.error('Could not load circle heads', e);
     circleHeadsCache = [];
-    renderDashboard();
   }
+  // Whichever page asked for this (dashboard's Circle Head Summary, or the
+  // Audit Report's Circle Head filter) re-renders once the data is in.
+  const activeView = document.querySelector('.panel-view.active');
+  if(activeView && activeView.id === 'view-dashboard') renderDashboard();
+  if(activeView && activeView.id === 'view-auditreport') renderAuditReportPage();
 }
 
 // Which stores the current viewer is scoped to before any manual filter —

@@ -623,9 +623,18 @@
         <button class="btn btn-primary" onclick="downloadAuditReportExcel()">⇩ Download Excel report</button>
       </div>
       <p class="hint">Match/short/excess numbers come from the reconciliation; Remarks, Reviewed By and Audited On come straight from whatever the Circle Head (or admin) wrote when they approved or rejected that store.</p>
+      <div class="report-progressbox" id="auditReportProgressBox">
+        <div class="report-progressbox-top">
+          <span class="report-progressbox-label">Store audit progress</span>
+          <span class="report-progressbox-pct" id="auditReportProgressPct">0%</span>
+        </div>
+        <div class="report-progress-track"><div class="report-progress-fill" id="auditReportProgressFill" style="width:0%;"></div></div>
+        <p class="report-progressbox-sub" id="auditReportProgressSub">0 / 0 stores submitted</p>
+      </div>
       <div class="detail-toolbar">
         <input id="auditReportSearch" type="text" placeholder="Search store, circle, or remark…" oninput="renderAuditReportPage()">
         <div class="detail-toolbar-left">
+          <select id="auditReportCircleHeadFilter" onchange="renderAuditReportPage()"><option value="">All circle heads</option></select>
           <select id="auditReportCircleFilter" onchange="renderAuditReportPage()"><option value="">All circles</option></select>
         </div>
       </div>
