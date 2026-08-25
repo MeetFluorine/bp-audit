@@ -129,69 +129,89 @@
       </button>
 
       <nav class="sidebar-nav" id="sidebarNav">
-      <div class="nav-item active cap-dashboard-only" id="tab-dashboard" onclick="showStep('dashboard')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Overview</span>
-        </span>
+      <div class="nav-parent" data-group="reports">
+        <div class="nav-parent-label" onclick="toggleNavParent(this)">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></span>
+          <span class="nav-parent-text">Reports</span>
+          <svg class="nav-parent-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+        </div>
+        <div class="nav-flyout">
+          <div class="nav-item active cap-dashboard-only" id="tab-dashboard" onclick="showStep('dashboard')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg></span>
+            <span class="nav-text"><span class="nav-label">Overview</span></span>
+          </div>
+          <div class="nav-item admin-only" id="tab-auditreport" onclick="showStep('auditreport')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">Audit Report</span>
+              <span class="nav-sub">Every store, with the reviewer's remarks</span>
+            </span>
+          </div>
+          <div class="nav-item admin-only" id="tab-compare" onclick="showStep('compare')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">Compare Cycles</span>
+              <span class="nav-sub">Trends across audit cycles</span>
+            </span>
+          </div>
+        </div>
       </div>
 
-      <p class="nav-group-label">Operations</p>
-      <div class="nav-item cap-scan-only" id="tab-scan" onclick="showStep('scan')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Scan / Upload</span>
-          <span class="nav-sub" id="scanSub">Go store by store</span>
-        </span>
-      </div>
-      <div class="nav-item cap-mystores-only" id="tab-mystores" onclick="showStep('mystores')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18"/><path d="M9 21V9"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">My Stores</span>
-          <span class="nav-sub">Your assigned stores &amp; status</span>
-        </span>
-      </div>
-      <div class="nav-item cap-setup-only" id="tab-setup" onclick="showStep('setup')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Setup Base Data</span>
-          <span class="nav-sub" id="setupSub">Upload the system/expected list</span>
-        </span>
-      </div>
-      <div class="nav-item cap-approve-only" id="tab-approvals" onclick="showStep('approvals')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Approvals</span>
-          <span class="nav-sub">Review &amp; sign off submissions</span>
-        </span>
+      <div class="nav-parent" data-group="management">
+        <div class="nav-parent-label" onclick="toggleNavParent(this)">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 1 1 3.6 2.94"/><path d="M15 20a5 5 0 0 1 5.5-4.97"/></svg></span>
+          <span class="nav-parent-text">Management</span>
+          <svg class="nav-parent-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+        </div>
+        <div class="nav-flyout">
+          <div class="nav-item admin-only" id="tab-admin" onclick="showStep('admin')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 1 1 3.6 2.94"/><path d="M15 20a5 5 0 0 1 5.5-4.97"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">Users &amp; Stores</span>
+              <span class="nav-sub">Approve auditors, assign stores</span>
+            </span>
+          </div>
+          <div class="nav-item cap-approve-only" id="tab-approvals" onclick="showStep('approvals')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">Approvals</span>
+              <span class="nav-sub">Review &amp; sign off submissions</span>
+            </span>
+          </div>
+        </div>
       </div>
 
-      <p class="nav-group-label admin-only">Management</p>
-      <div class="nav-item admin-only" id="tab-admin" onclick="showStep('admin')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 1 1 3.6 2.94"/><path d="M15 20a5 5 0 0 1 5.5-4.97"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Users & Stores</span>
-          <span class="nav-sub">Approve auditors, assign stores</span>
-        </span>
+      <div class="nav-parent" data-group="operations">
+        <div class="nav-parent-label" onclick="toggleNavParent(this)">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
+          <span class="nav-parent-text">Operations</span>
+          <svg class="nav-parent-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+        </div>
+        <div class="nav-flyout">
+          <div class="nav-item cap-scan-only" id="tab-scan" onclick="showStep('scan')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3"/><path d="M17 4h4v3"/><path d="M21 17v3h-4"/><path d="M7 20H3v-3"/><path d="M7 9v6"/><path d="M11 9v6"/><path d="M15 9v6"/><path d="M18 9v6"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">Scan / Upload</span>
+              <span class="nav-sub" id="scanSub">Go store by store</span>
+            </span>
+          </div>
+          <div class="nav-item cap-setup-only" id="tab-setup" onclick="showStep('setup')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">Setup Base Data</span>
+              <span class="nav-sub" id="setupSub">Upload the system/expected list</span>
+            </span>
+          </div>
+          <div class="nav-item cap-mystores-only" id="tab-mystores" onclick="showStep('mystores')">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18"/><path d="M9 21V9"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg></span>
+            <span class="nav-text">
+              <span class="nav-label">My Stores</span>
+              <span class="nav-sub">Your assigned stores &amp; status</span>
+            </span>
+          </div>
+        </div>
       </div>
 
-      <p class="nav-group-label admin-only">Reports</p>
-      <div class="nav-item admin-only" id="tab-auditreport" onclick="showStep('auditreport')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Audit Report</span>
-          <span class="nav-sub">Every store, with the reviewer's remarks</span>
-        </span>
-      </div>
-      <div class="nav-item admin-only" id="tab-compare" onclick="showStep('compare')">
-        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg></span>
-        <span class="nav-text">
-          <span class="nav-label">Compare Cycles</span>
-          <span class="nav-sub">Trends across audit cycles</span>
-        </span>
-      </div>
-
-      <p class="nav-group-label">Settings</p>
       <div class="nav-item" id="tab-profile" onclick="showStep('profile')">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span>
         <span class="nav-text">

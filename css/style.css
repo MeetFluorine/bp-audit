@@ -71,10 +71,10 @@ body.theme-dark{
   --shadow-lg:0 16px 40px rgba(0,0,0,0.55);
 }
 
-html{overflow-x:hidden;width:100%;}
+html{width:100%;}
 *{box-sizing:border-box;}
 canvas{max-width:100%;}
-body{margin:0;overflow-x:hidden;width:100%;background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.5;-webkit-font-smoothing:antialiased;transition:background .15s,color .15s;}
+body{margin:0;width:100%;background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.5;-webkit-font-smoothing:antialiased;transition:background .15s,color .15s;}
 .wrap{max-width:1360px;margin:0;padding:22px 32px 60px;}
 a{color:inherit;}
 
@@ -83,10 +83,23 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--steel);outline
 input::placeholder{color:var(--text-faint);}
 
 /* ============ APP SHELL ============ */
-.app-shell{display:flex;min-height:100vh;align-items:stretch;max-width:100vw;}
+/* The shell is pinned to exactly one viewport height and never scrolls
+   itself (overflow:hidden). The sidebar is a plain flex child sized to
+   that same 100vh, so it simply never enters any scrolling flow — no
+   position:sticky trick needed, and no ancestor `overflow` value to fight
+   with it. .main-content is the ONLY scrolling container on the page
+   (overflow-y:auto below); everything the user scrolls through (topbar +
+   dashboard content) lives inside it, while the sidebar stays fixed in
+   place at all times. */
+.app-shell{display:flex;height:100vh;align-items:stretch;max-width:100vw;overflow:hidden;}
 
 /* ---- Sidebar ---- */
-.sidebar{width:264px;flex-shrink:0;background:var(--sidebar-bg);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;z-index:20;}
+/* No overflow-y here: setting overflow on one axis forces the browser to
+   clip the other axis too, which would cut off the nav flyout menus (they
+   pop out to the right of the sidebar's own box, see @media(min-width:901px)
+   below). The sidebar's content is sized to comfortably fit 100vh, so it
+   doesn't need to scroll internally anyway. */
+.sidebar{width:264px;flex-shrink:0;background:var(--sidebar-bg);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;z-index:20;}
 .sidebar-brand{padding:22px 20px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:11px;}
 .brand-mark{width:36px;height:36px;flex-shrink:0;color:var(--steel);}
 .brand-mark svg{width:100%;height:100%;}
@@ -113,6 +126,20 @@ input::placeholder{color:var(--text-faint);}
 .nav-backdrop.open{display:block;}
 
 .nav-group-label{font-family:var(--font-mono);font-size:10px;letter-spacing:1.4px;color:var(--text-faint);text-transform:uppercase;margin:12px 10px 4px;}
+
+/* Nested category menu: a "Reports/Management/Operations" header with its
+   items grouped inside. Mobile-first default here is "always expanded
+   inline" (same visual weight the old flat grouped list had) — the
+   min-width:901px block further down is what turns this into an actual
+   hover flyout once there's a cursor to hover with. */
+.nav-parent{margin:2px 0;}
+.nav-parent-empty{display:none;}
+.nav-parent-label{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer;font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.2px;color:var(--text-faint);text-transform:uppercase;transition:background .15s,color .15s;}
+.nav-parent-label:hover{background:var(--panel-2);color:var(--text-dim);}
+.nav-parent-label .nav-icon{width:15px;height:15px;color:inherit;}
+.nav-parent-caret{width:13px;height:13px;margin-left:auto;flex-shrink:0;transition:transform .15s;}
+.nav-parent.active-parent .nav-parent-label{color:var(--steel);}
+.nav-flyout{display:flex;flex-direction:column;gap:2px;padding-left:2px;}
 .nav-group-label:first-child{margin-top:2px;}
 
 .nav-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s;}
@@ -162,7 +189,11 @@ input::placeholder{color:var(--text-faint);}
 .sidebar-signout svg{width:17px;height:17px;}
 
 /* ---- Top bar ---- */
-.main-content{flex:1;min-width:0;display:flex;flex-direction:column;}
+/* .main-content is the single scrolling container for the whole page body
+   (dashboard content, tables, everything the user scrolls through). Because
+   the sidebar lives outside it (as a sibling in .app-shell), scrolling here
+   can never drag the sidebar along with it. */
+.main-content{flex:1;min-width:0;display:flex;flex-direction:column;height:100vh;overflow-y:auto;overflow-x:hidden;}
 .topbar{position:sticky;top:0;z-index:15;background:var(--panel);border-bottom:1px solid var(--border);padding:13px 28px;display:flex;align-items:center;gap:16px;}
 .topbar-search{flex:1;max-width:420px;position:relative;}
 .topbar-search svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--text-faint);}
@@ -546,12 +577,50 @@ body.cap-client .client-readonly-banner{display:flex;align-items:center;gap:10px
   .widget-row{grid-template-columns:1fr;}
 }
 
+/* Desktop: the top-level list (category headers + standalone My Account)
+   stays visible top-to-bottom in the sidebar at all times — no hamburger
+   needed once there's room for it. Each category's items then appear as
+   a flyout to the right on hover (or tap, via .pinned-open — see
+   toggleNavParent()), instead of always sitting expanded inline, so the
+   sidebar itself stays compact. Below 900px (see the next block) all of
+   this reverts to a single collapsible dropdown with everything expanded
+   inline, since a flyout makes no sense once the sidebar collapses into
+   a top bar and there's no room to the right to open into. */
+@media (min-width:901px){
+  .sidebar-hamburger{display:none;}
+  .sidebar-nav{display:flex !important;position:static;box-shadow:none;border:none;padding:0;margin-top:2px;max-height:none;overflow-y:visible;background:transparent;}
+  .nav-backdrop{display:none !important;}
+
+  .nav-parent{position:relative;}
+  .nav-flyout{
+    display:none;position:absolute;top:0;left:calc(100% + 8px);min-width:240px;
+    background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    box-shadow:var(--shadow-lg);padding:8px;z-index:40;padding-left:8px;
+  }
+  /* Invisible bridge over the 8px gap between the label and the flyout.
+     Without this, moving the cursor diagonally toward a lower item in the
+     flyout dips below the label's own (short) row height while still in
+     that gap — outside both the label and the not-yet-reached flyout —
+     which breaks :hover and closes the menu before the cursor arrives.
+     This pseudo-element is a descendant of .nav-flyout (itself a descendant
+     of .nav-parent), so hovering it keeps .nav-parent:hover — and the
+     flyout it opens — active across the full height of the flyout, not
+     just the label's row. */
+  .nav-flyout::before{content:'';position:absolute;top:0;left:-8px;width:8px;height:100%;}
+  .nav-parent:hover .nav-flyout,
+  .nav-parent.pinned-open .nav-flyout{display:flex;}
+  .nav-parent-caret{transform:rotate(0deg);}
+  .nav-parent:hover .nav-parent-caret,
+  .nav-parent.pinned-open .nav-parent-caret{transform:rotate(90deg);}
+}
+
 @media (max-width:900px){
   .charts-row{grid-template-columns:1fr;}
   .scan-store-select{grid-template-columns:1fr;}
 
-  .app-shell{flex-direction:column;}
-  .sidebar{width:100%;height:auto;position:relative;border-right:none;border-bottom:1px solid var(--border);}
+  .app-shell{flex-direction:column;height:auto;overflow:visible;}
+  .sidebar{width:100%;height:auto;overflow-y:visible;border-right:none;border-bottom:1px solid var(--border);}
+  .main-content{height:auto;overflow-y:visible;}
   .content-topbar{padding:14px 20px;}
   .topbar{padding:12px 16px;}
   .topbar-cycle{display:none;}

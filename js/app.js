@@ -19,6 +19,10 @@ let dashboardStoreFilter = null;
 // don't re-fetch it every time.
 let adminViewingCircleHead = null;
 let circleHeadsCache = null;
+// {uid: {email, full_name}} for every profile — admin-only (Audit Report
+// page), used to resolve a reviewer's actual current name instead of
+// whatever was snapshotted into store_locks at approval time.
+let allProfilesCache = null;
 
 function setDashboardStoreFilter(store){
   dashboardStoreFilter = (dashboardStoreFilter === store) ? null : store;
@@ -471,6 +475,7 @@ async function onLoginSuccess(knownUser){
     document.getElementById('pendingScreen').style.display = 'none';
     document.getElementById('appRoot').style.display = 'block';
     document.body.className = bodyClassesForRole(profile.role) + (document.body.classList.contains('theme-dark') ? ' theme-dark' : '');
+    updateNavParentVisibility(); // hide any Reports/Management/Operations header with nothing visible inside for this role
     const whoAmIEl = document.getElementById('whoAmI');
     whoAmIEl.textContent = `${displayNameFor(user.email, profile.full_name)} · ${roleLabel(profile.role)}`;
     whoAmIEl.title = user.email;
@@ -518,6 +523,20 @@ async function onLoginSuccess(knownUser){
 // ---------------- COMPARE CYCLES ----------------
 let compareTrendChartInstance = null;
 
+async function loadAllProfilesForAdmin(){
+  try{
+    const { data, error } = await sb.from('profiles').select('id,email,full_name');
+    if(error) throw error;
+    allProfilesCache = {};
+    (data||[]).forEach(p => { allProfilesCache[p.id] = { email: p.email, full_name: p.full_name }; });
+  }catch(e){
+    console.error('Could not load profiles for Audit Report', e);
+    allProfilesCache = {};
+  }
+  const activeView = document.querySelector('.panel-view.active');
+  if(activeView && activeView.id === 'view-auditreport') renderAuditReportPage();
+}
+
 // AUDIT REPORT — every store's numbers plus the reviewer's own remark from
 // store_locks (approval_remark), for the admin to see everything a circle
 // head wrote at approval time without opening each store individually.
@@ -525,6 +544,7 @@ function renderAuditReportPage(){
   if(!currentProfile || currentProfile.role !== 'admin') return;
   reconcile();
   if(circleHeadsCache === null){ loadCircleHeadsForAdmin(); } // async; re-renders this page once loaded
+  if(allProfilesCache === null){ loadAllProfilesForAdmin(); } // async; re-renders this page once loaded
   const circleSel = document.getElementById('auditReportCircleFilter');
   if(circleSel && circleSel.options.length <= 1){
     const circles = [...new Set(Object.values(STORE_MASTER))].sort();
@@ -558,7 +578,7 @@ function renderAuditReportPage(){
 
   const rows = scopeStores.map(store => {
     const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
-    const approval = storeApprovalInfo(store);
+    const approval = storeApprovalInfo(store, allProfilesCache);
     return { store, circle: circleFor(store), invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex, approval };
   }).filter(r => {
     if(!search) return true;
@@ -596,7 +616,7 @@ function downloadAuditReportExcel(){
   stores = stores.sort();
   const rows = stores.map(store => {
     const { invExpected, invMatched, invShort, grnExpected, grnMatched, grnShort, m, sh, ex } = storeSourceSummary(store);
-    const approval = storeApprovalInfo(store);
+    const approval = storeApprovalInfo(store, allProfilesCache);
     return {
       Store: store, Circle: circleFor(store),
       'Inventory Expected': invExpected, 'Inventory Matched': invMatched, 'Inventory Short': invShort,
@@ -1464,7 +1484,7 @@ async function fetchCycleData(){
   storeLocks = (lockRows||[]).map(r => ({
     store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email,
     lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at,
-    approvalStatus: r.approval_status || 'pending', approvedByEmail: r.approved_by_email || null, approvedByName: r.approved_by_name || null,
+    approvalStatus: r.approval_status || 'pending', approvedBy: r.approved_by || null, approvedByEmail: r.approved_by_email || null, approvedByName: r.approved_by_name || null,
     approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleString() : null, approvedAtRaw: r.approved_at || null, approvalRemark: r.approval_remark || ''
   }));
 
@@ -1552,6 +1572,34 @@ function closeSidebarNav(){
   const nav = document.getElementById('sidebarNav'); if(nav) nav.classList.remove('open');
   const hamburger = document.getElementById('sidebarHamburger'); if(hamburger) hamburger.classList.remove('open');
   const backdrop = document.getElementById('navBackdrop'); if(backdrop) backdrop.classList.remove('open');
+  // Also collapse any category flyout that was pinned open by a tap
+  // (desktop hover-flyouts don't need this — they close on their own
+  // when the mouse leaves — this is only for the touch-tap fallback).
+  document.querySelectorAll('.nav-parent.pinned-open').forEach(p => p.classList.remove('pinned-open'));
+}
+
+// Desktop flyouts open on hover; on a touch screen (no real hover) tapping
+// the category label toggles it open/closed instead, so the menu still
+// works on tablets/touch laptops at desktop width.
+function toggleNavParent(labelEl){
+  const parent = labelEl.closest('.nav-parent');
+  if(!parent) return;
+  const willOpen = !parent.classList.contains('pinned-open');
+  document.querySelectorAll('.nav-parent.pinned-open').forEach(p => { if(p !== parent) p.classList.remove('pinned-open'); });
+  parent.classList.toggle('pinned-open', willOpen);
+}
+
+// A category (Reports/Management/Operations) should disappear entirely for
+// a role that can't see anything inside it — e.g. a client has neither
+// "Users & Stores" nor "Approvals", so "Management" would otherwise show
+// as a header hiding an empty flyout. Runs once per login/role-class
+// change; cheap enough not to need re-running on every navigation.
+function updateNavParentVisibility(){
+  document.querySelectorAll('.nav-parent').forEach(parent => {
+    const items = parent.querySelectorAll('.nav-flyout .nav-item');
+    const anyVisible = Array.from(items).some(item => getComputedStyle(item).display !== 'none');
+    parent.classList.toggle('nav-parent-empty', !anyVisible);
+  });
 }
 
 function showStep(step, skipHistory){
@@ -1559,6 +1607,13 @@ function showStep(step, skipHistory){
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
   });
+  // Highlight the category header for whichever flyout the active tab
+  // lives in (a standalone item like My Account has no parent — fine,
+  // querySelectorAll just finds nothing to touch).
+  document.querySelectorAll('.nav-parent').forEach(p => p.classList.remove('active-parent'));
+  const activeTabEl = document.getElementById('tab-'+step);
+  const activeParent = activeTabEl && activeTabEl.closest('.nav-parent');
+  if(activeParent) activeParent.classList.add('active-parent');
   const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', mystores:'My Stores', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles', approvals:'Approvals', auditreport:'Audit Report'};
   const titleEl = document.getElementById('contentTitle');
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
@@ -3039,7 +3094,7 @@ function renderDashboard(){
     : '<tr><td colspan="9" class="empty-note">No matching records.</td></tr>';
 
   renderCharts(stores, {match, short, excess, matchPct});
-  buildLiveActivity(pendingStores, dashboardStoreFilter);
+  buildLiveActivity(pendingStores, dashboardStoreFilter, roleScopedStores);
 }
 
 function renderCharts(stores, healthTotals){
@@ -3094,7 +3149,12 @@ function renderCharts(stores, healthTotals){
 }
 
 // ---------------- LIVE ACTIVITY FEED (built from real scan / upload / lock / cycle timestamps) ----------------
-function buildLiveActivity(pendingStores, scopeStore){
+// roleScopedStores restricts the feed to whatever the viewer is actually
+// scoped to — a circle head's own circle(s), or an admin's drilled-in
+// Circle Head territory — same store set every other dashboard widget
+// already respects. Without this, a circle head was seeing scan/upload/
+// lock activity for every store in the whole audit, not just their own.
+function buildLiveActivity(pendingStores, scopeStore, roleScopedStores){
   const events = [];
 
   // Recent scans, most recent per store collapsed isn't necessary — show the latest individual scans.
@@ -3133,7 +3193,12 @@ function buildLiveActivity(pendingStores, scopeStore){
     events.push({ ts:currentCycleCreatedAt, type:'start', store:null, title:'Audit cycle started', sub: currentCycleName || 'Untitled cycle' });
   }
 
-  const scoped = scopeStore ? events.filter(e => !e.store || e.store === scopeStore) : events;
+  const scoped = events.filter(e => {
+    if(!e.store) return true; // cycle-level events (e.g. "Audit cycle started") always show
+    if(roleScopedStores && !roleScopedStores.has(e.store)) return false;
+    if(scopeStore && e.store !== scopeStore) return false;
+    return true;
+  });
   scoped.sort((a,b) => (a.ts < b.ts ? 1 : -1));
   const top = scoped.slice(0, 8);
 
@@ -3216,18 +3281,27 @@ function storeSourceSummary(store){
 // store_locks. This is the one place "when was it audited" and "what did
 // the reviewer say" live, so both the export and the on-screen Audit
 // Report page read it from here rather than re-deriving anything.
-function storeApprovalInfo(store){
+//
+// profilesById (optional): a {uid: {email, full_name}} lookup. When given
+// (the Audit Report page passes one, since it's admin-only and can read
+// every profile), reviewedBy is resolved from the reviewer's CURRENT
+// profile — the accurate source of truth — instead of the snapshot text
+// columns, which are only as good as whatever full_name was set (or
+// blank) at the moment they clicked Approve.
+function storeApprovalInfo(store, profilesById){
   const lock = storeLocks.find(l => l.store === store);
   if(!lock) return { status:'not submitted', reviewedOn:'', reviewedBy:'', remark:'' };
-  // First name only — approvedByName is the reviewer's own display name
-  // (set at approval time); for a row approved before that column existed,
-  // fall back to deriving one from their email the same way the rest of
-  // the app does.
-  const fullDisplayName = displayNameFor(lock.approvedByEmail, lock.approvedByName);
+  let reviewedByFull = '';
+  if(profilesById && lock.approvedBy && profilesById[lock.approvedBy]){
+    const p = profilesById[lock.approvedBy];
+    reviewedByFull = displayNameFor(p.email, p.full_name);
+  } else if(lock.approvedByEmail || lock.approvedByName){
+    reviewedByFull = displayNameFor(lock.approvedByEmail, lock.approvedByName);
+  }
   return {
     status: lock.approvalStatus || 'pending',
     reviewedOn: lock.approvedAtRaw ? new Date(lock.approvedAtRaw).toLocaleDateString() : '',
-    reviewedBy: lock.approvedByEmail || lock.approvedByName ? (fullDisplayName.split(' ')[0] || fullDisplayName) : '',
+    reviewedBy: reviewedByFull ? (reviewedByFull.split(' ')[0] || reviewedByFull) : '',
     remark: lock.approvalRemark || ''
   };
 }
