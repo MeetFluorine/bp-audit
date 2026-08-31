@@ -1472,22 +1472,7 @@ async function fetchAllRows(table, cycleId){
   return all;
 }
 
-async function fetchCycleData(){
-  if(!currentCycleId) return;
-  const baseRows = await fetchAllRows('base_serials', currentCycleId);
-  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, sourceType: r.source_type || 'inventory', asnNo: r.asn_no || null, uploadedAt:r.uploaded_at}));
-
-  const scanRows = await fetchAllRows('scans', currentCycleId);
-  scanData = (scanRows||[]).map(r => ({id:r.id, store:normalizeStoreCode(r.store_code), sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), rawTs:r.scanned_at, scannedBy:r.scanned_by}));
-
-  const lockRows = await fetchAllRows('store_locks', currentCycleId);
-  storeLocks = (lockRows||[]).map(r => ({
-    store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email,
-    lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at,
-    approvalStatus: r.approval_status || 'pending', approvedBy: r.approved_by || null, approvedByEmail: r.approved_by_email || null, approvedByName: r.approved_by_name || null,
-    approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleString() : null, approvedAtRaw: r.approved_at || null, approvalRemark: r.approval_remark || ''
-  }));
-
+async function fetchAllUserStoreAssignments(){
   // For admins this is every assignment across every user (used to compute
   // "how many of the stores actually being audited are done"); for a
   // regular user, RLS restricts this to just their own rows anyway.
@@ -1501,6 +1486,30 @@ async function fetchCycleData(){
     if(!data || data.length < 1000) break;
     assignFrom += 1000;
   }
+  return assignRows;
+}
+
+async function fetchCycleData(){
+  if(!currentCycleId) return;
+  // These four reads are fully independent of each other — running them
+  // sequentially (as this used to) meant the total wait was the SUM of all
+  // four round trips. Promise.all runs them concurrently instead, so the
+  // total wait is roughly just the slowest single one.
+  const [baseRows, scanRows, lockRows, assignRows] = await Promise.all([
+    fetchAllRows('base_serials', currentCycleId),
+    fetchAllRows('scans', currentCycleId),
+    fetchAllRows('store_locks', currentCycleId),
+    fetchAllUserStoreAssignments()
+  ]);
+
+  baseData = (baseRows||[]).map(r => ({store:normalizeStoreCode(r.store_code), sku:r.sku, desc:r.description, serial:r.serial_no, sourceType: r.source_type || 'inventory', asnNo: r.asn_no || null, uploadedAt:r.uploaded_at}));
+  scanData = (scanRows||[]).map(r => ({id:r.id, store:normalizeStoreCode(r.store_code), sku:r.sku, serial:r.serial_no, ts: new Date(r.scanned_at).toLocaleString(), rawTs:r.scanned_at, scannedBy:r.scanned_by}));
+  storeLocks = (lockRows||[]).map(r => ({
+    store:normalizeStoreCode(r.store_code), lockedBy:r.locked_by, lockedByEmail:r.locked_by_email,
+    lockedAt:new Date(r.locked_at).toLocaleString(), lockedAtRaw:r.locked_at,
+    approvalStatus: r.approval_status || 'pending', approvedBy: r.approved_by || null, approvedByEmail: r.approved_by_email || null, approvedByName: r.approved_by_name || null,
+    approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleString() : null, approvedAtRaw: r.approved_at || null, approvalRemark: r.approval_remark || ''
+  }));
   allStoreAssignments = assignRows;
 }
 
@@ -1674,8 +1683,15 @@ function unsubscribeRealtime(){
 let realtimeDebounceTimer = null;
 function handleRealtimeChange(){
   // Debounce: a bulk upload or many quick scans fire many events at once —
-  // wait for things to settle for a moment before refreshing.
+  // wait for things to settle for a moment before refreshing. The extra
+  // random jitter (0-900ms on top of the base 600ms) matters once several
+  // auditors are connected to the same cycle: without it, every client
+  // reacts to the same broadcast at the exact same millisecond and all
+  // fire the same expensive refetch simultaneously, which is what was
+  // stacking up into "statement timeout" under real concurrent use. The
+  // jitter spreads those refetches out over ~1.5s instead of one spike.
   clearTimeout(realtimeDebounceTimer);
+  const jitter = Math.floor(Math.random() * 900);
   realtimeDebounceTimer = setTimeout(async () => {
     if(!currentCycleId) return;
     try{
@@ -1695,8 +1711,13 @@ function handleRealtimeChange(){
       refreshMissingBaseDataNotice();
     }catch(e){
       console.error('Realtime refresh failed', e);
+      // Don't leave the user stuck needing to sign out/in to recover — if
+      // this refresh failed (e.g. a timeout under load), retry once on a
+      // short delay instead of silently giving up until their next action.
+      clearTimeout(realtimeDebounceTimer);
+      realtimeDebounceTimer = setTimeout(() => handleRealtimeChange(), 4000);
     }
-  }, 600);
+  }, 600 + jitter);
 }
 
 let dashboardPollTimer = null;
