@@ -230,6 +230,18 @@ input::placeholder{color:var(--text-faint);}
 .card h4{margin:0 0 6px;font-size:12.5px;text-transform:uppercase;letter-spacing:0.9px;color:var(--text-dim);font-weight:600;}
 .card p.hint{font-size:12.5px;color:var(--text-faint);margin:0 0 16px;}
 
+/* Minimal info disclosure — keeps the default view to one short, essential
+   line and tucks edge-case/how-it-works detail behind a small expandable
+   link instead of a permanently-visible paragraph. Native <details>, so it
+   needs no JS and stays keyboard/screen-reader accessible. */
+.hint-details{margin:-8px 0 16px;font-size:12.5px;}
+.hint-details summary{cursor:pointer;color:var(--text-dim);font-weight:600;list-style:none;display:inline-flex;align-items:center;gap:5px;user-select:none;}
+.hint-details summary::-webkit-details-marker{display:none;}
+.hint-details summary::before{content:"ⓘ";font-size:12px;opacity:0.75;}
+.hint-details[open] summary{color:var(--steel);}
+.hint-details summary:hover{color:var(--steel);}
+.hint-details p{margin:8px 0 0;color:var(--text-faint);font-size:12.5px;line-height:1.55;}
+
 .upload-zone{border:1.5px dashed var(--border);border-radius:14px;padding:24px;text-align:center;margin-bottom:14px;transition:border-color .15s,background .15s;background:var(--panel-2);}
 .upload-zone:hover,.upload-zone.drag-active{border-color:var(--steel);background:var(--steel-bg);}
 .upload-zone-trigger{display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;}

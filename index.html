@@ -333,14 +333,18 @@
 
     <div class="card">
       <h4>Upload base / system data</h4>
-      <p class="hint">Upload your base file as-is — it auto-detects <code>LocationCode</code>/<code>Client</code> as store, <code>ItemNo</code> as SKU, and <code>SerialNo</code>/<code>ItemSerialNo</code> (falling back to <code>IMEI</code> if blank) as the serial to reconcile against. Extra columns like Description, MRP, LotNo etc. are ignored. This is locked in as part of the "expected" list before scanning starts.</p>
-      <p class="hint">Choose what this file represents before uploading. <b>Inventory Stock</b> is stock already inward in the system (the original base data). <b>GRN Stock (Pending Inward)</b> is stock that's physically at the store but hasn't been GRN'd/inward yet — e.g. an ASN serial report like MultiUOMSerialReport. Both are combined into the store's complete expected quantity that scans get reconciled against; the export breaks the totals back out by source.</p>
+      <p class="hint">Upload your base file as-is — store, SKU, and serial columns are auto-detected.</p>
+      <details class="hint-details">
+        <summary>Column detection & Inventory vs. GRN</summary>
+        <p>Auto-detects <code>LocationCode</code>/<code>Client</code> as store, <code>ItemNo</code> as SKU, and <code>SerialNo</code>/<code>ItemSerialNo</code> (falling back to <code>IMEI</code> if blank) as the serial to reconcile against. Extra columns like Description, MRP, LotNo etc. are ignored. This is locked in as part of the "expected" list before scanning starts.</p>
+        <p><b>Inventory Stock</b> is stock already inward in the system (the original base data). <b>GRN Stock (Pending Inward)</b> is stock that's physically at the store but hasn't been GRN'd/inward yet — e.g. an ASN serial report like MultiUOMSerialReport. Both combine into the store's complete expected quantity; the export breaks totals back out by source.</p>
+      </details>
       <div class="btn-row" id="baseDataTypeRow" role="radiogroup" aria-label="Base data type">
         <label class="radio-pill"><input type="radio" name="baseDataType" value="inventory" checked> Inventory Stock</label>
         <label class="radio-pill"><input type="radio" name="baseDataType" value="grn"> GRN Stock (Pending Inward)</label>
       </div>
       <div class="cap-circlehead-only" id="circleHeadStoreScopeRow" style="margin-bottom:14px;">
-        <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Restrict this upload to one store (optional safety check — any row in the file for a different store gets dropped with a warning)</label>
+        <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Restrict to one store <span style="font-weight:400;">(optional — rows for a different store are dropped with a warning)</span></label>
         <select id="circleHeadUploadStoreSelect"><option value="">— Any store in my circle(s) —</option></select>
       </div>
       <div class="upload-zone" id="baseUploadZone">
@@ -373,7 +377,11 @@
   <div class="panel-view" id="view-scan">
     <div class="card">
       <h4>Select store</h4>
-      <p class="hint">Pick the store you're currently auditing. Scan serials with a barcode scanner (it types + presses Enter automatically) or type them manually, or upload an Excel of pre-scanned serials for this store. Note: if your uploaded file already has its own store/location column, that value is used instead of the dropdown — so a multi-store file will correctly split across stores, but a single-store file with a leftover store column from another export could get misattributed. Leave that column out if you want everything in the file counted under the selected store.</p>
+      <p class="hint">Pick the store you're auditing, then scan or upload serials for it.</p>
+      <details class="hint-details">
+        <summary>How scanning & multi-store files work</summary>
+        <p>Scan with a barcode scanner (it types + presses Enter automatically) or type serials manually, or upload an Excel of pre-scanned serials. If your uploaded file already has its own store/location column, that value is used instead of the dropdown — a multi-store file will correctly split across stores, but a single-store file with a leftover store column from another export could get misattributed. Leave that column out if you want everything in the file counted under the selected store.</p>
+      </details>
       <div class="scan-store-select">
         <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Store</label><select id="scanStoreSelect" style="width:100%;" onchange="renderScanView()"></select></div>
         <div><label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:6px;">Upload scanned Excel for this store</label>
@@ -424,12 +432,16 @@
   <div class="panel-view" id="view-approvals">
     <div class="card" id="signupRequestsCard">
       <h4>Pending Sign-up Requests <span id="signupRequestsCount" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;">0</span></h4>
-      <p class="hint">Auditors who picked one of your stores when they signed up — routed straight to you instead of admin. Approving grants them access immediately (their store assignment is already set from what they chose at sign-up).</p>
+      <p class="hint">Auditors who picked one of your stores at sign-up — approve to grant access immediately.</p>
       <div id="signupRequestsList"></div>
     </div>
     <div class="card">
       <h4>Pending Approvals <span id="approvalsPageCount" style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;">0</span></h4>
-      <p class="hint">Stores your auditors have submitted, with their full variance so you can review before signing off. Approving or rejecting is a review record — the submitted data already counts in the numbers on Overview either way. Your remark carries through to the exported report's Remarks column.</p>
+      <p class="hint">Stores your auditors have submitted, with their full variance — review and sign off.</p>
+      <details class="hint-details">
+        <summary>How approval affects the report</summary>
+        <p>Approving or rejecting is a review record — the submitted data already counts in the numbers on Overview either way. Your remark carries through to the exported report's Remarks column.</p>
+      </details>
       <div id="approvalsPageList"></div>
     </div>
     <div class="card">
