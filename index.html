@@ -29,7 +29,7 @@
 
 <div id="authScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
-    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner" loading="lazy" decoding="async">
     <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
     <p class="brand-eyebrow" style="margin-bottom:22px;">Serialized inventory · physical verification</p>
     <div id="authTabs" class="auth-tabs">
@@ -65,7 +65,7 @@
       </div>
     </div>
     <p class="forgot-password-link" id="forgotPasswordLink" onclick="showForgotPasswordForm()">Forgot password?</p>
-    <button class="btn btn-primary" style="width:100%;" id="authSubmitBtn" onclick="handleAuthSubmit()">Sign in</button>
+    <button class="btn btn-primary" style="width:100%;" id="authSubmitBtn" onclick="handleAuthSubmit(this)">Sign in</button>
     <p id="authMessage" class="auth-message"></p>
   </div>
 </div>
@@ -73,7 +73,7 @@
 <!-- FORGOT PASSWORD — request reset email -->
 <div id="forgotPasswordScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
-    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner" loading="lazy" decoding="async">
     <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Reset your password</p>
     <p class="brand-eyebrow" style="margin-bottom:22px;">We'll email you a link to reset it</p>
     <div class="form-field" style="margin-bottom:16px;text-align:left;"><label>Email</label><input id="forgotEmail" type="email" style="width:100%;" placeholder="you@company.com"></div>
@@ -86,7 +86,7 @@
 <!-- SET NEW PASSWORD — shown after clicking the emailed reset link -->
 <div id="resetPasswordScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
-    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner" loading="lazy" decoding="async">
     <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Set a new password</p>
     <p class="brand-eyebrow" style="margin-bottom:22px;">Choose a new password for your account</p>
     <div class="form-field" style="margin-bottom:12px;text-align:left;"><label>New password</label><input id="resetNewPassword" type="password" style="width:100%;" placeholder="At least 6 characters"></div>
@@ -99,7 +99,7 @@
 <!-- PENDING APPROVAL SCREEN -->
 <div id="pendingScreen" class="auth-wrap" style="display:none;">
   <div class="auth-card">
-    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner">
+    <img src="assets/shadowfax-banner-640.png" alt="Shadowfax — Think ahead!" class="auth-banner" loading="lazy" decoding="async">
     <p class="brand-title" style="margin:8px 0 4px;font-size:19px;">Audit Tracker</p>
     <p class="brand-eyebrow" style="margin-bottom:16px;">Serialized inventory · physical verification</p>
     <p class="hint" style="margin-bottom:20px;color:var(--text-faint);">Your account (<span id="pendingEmail" style="color:var(--text);"></span>) is created but hasn't been approved yet. Ask your admin to approve your access and assign you to a store — this page will unlock once that's done.</p>
@@ -113,7 +113,7 @@
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div class="brand-mark">
-        <img src="assets/shadowfax-mark-96.png" alt="Shadowfax">
+        <img src="assets/shadowfax-mark-96.png" alt="Shadowfax" loading="lazy" decoding="async">
       </div>
       <div class="brand-textblock">
         <h1 class="brand-title">Shadowfax</h1>
@@ -226,8 +226,8 @@
       <p class="sidebar-cyclebox-label">Audit cycle</p>
       <input id="cycleName" placeholder="PV-2026-Q3">
       <div class="btn-row">
-        <button class="btn" onclick="handleLoadCycle()">Load</button>
-        <button class="btn btn-primary admin-only" onclick="handleCreateCycle()">+ New</button>
+        <button class="btn" onclick="handleLoadCycle(this)">Load</button>
+        <button class="btn btn-primary admin-only" onclick="handleCreateCycle(this)">+ New</button>
       </div>
       <div class="btn-row" style="margin-top:6px;">
         <button class="btn btn-danger admin-only" style="flex:1;" onclick="handleDeleteCycle()" title="Permanently deletes the connected cycle and all its base data + scans">Delete cycle</button>
@@ -263,7 +263,7 @@
       </button>
       <div class="topbar-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input id="topbarSearch" placeholder="Search stores, SKUs, serials…" oninput="handleTopbarSearch(this.value)">
+        <input id="topbarSearch" placeholder="Search stores, SKUs, serials…" oninput="debouncedHandleTopbarSearch(this.value)">
       </div>
       <div class="topbar-spacer"></div>
       <div class="topbar-right">
@@ -541,7 +541,7 @@
 
     <h3 class="section-title">Recent Reconciliation Details</h3>
     <div class="detail-toolbar">
-      <input id="detailSearch" placeholder="Search serial, SKU, or store…" oninput="renderDashboard()">
+      <input id="detailSearch" placeholder="Search serial, SKU, or store…" oninput="debouncedRenderDashboard()">
       <div class="detail-toolbar-left">
         <span id="detailFilterBar" class="detail-filter-bar">Showing all stores</span>
         <select id="detailStoreFilterSelect" onchange="setDashboardStoreFilter(this.value||null)" title="Filter by store">
@@ -652,7 +652,7 @@
         <p class="report-progressbox-sub" id="auditReportProgressSub">0 / 0 stores submitted</p>
       </div>
       <div class="detail-toolbar">
-        <input id="auditReportSearch" type="text" placeholder="Search store, circle, or remark…" oninput="renderAuditReportPage()">
+        <input id="auditReportSearch" type="text" placeholder="Search store, circle, or remark…" oninput="debouncedRenderAuditReportPage()">
         <div class="detail-toolbar-left">
           <select id="auditReportCircleHeadFilter" onchange="renderAuditReportPage()"><option value="">All circle heads</option></select>
           <select id="auditReportCircleFilter" onchange="renderAuditReportPage()"><option value="">All circles</option></select>
@@ -749,8 +749,8 @@
     </div>
     <p id="confirmModalMessage" style="text-align:center;margin:14px 0 22px;font-size:14px;color:var(--text);"></p>
     <div class="btn-row" style="justify-content:center;">
-      <button class="btn" onclick="confirmModalNo()">No, cancel</button>
-      <button class="btn btn-danger" onclick="confirmModalYes()">Yes, continue</button>
+      <button class="btn" onclick="confirmModalNo()" id="confirmModalNoBtn">No, cancel</button>
+      <button class="btn btn-danger" onclick="confirmModalYes(this)" id="confirmModalYesBtn">Yes, continue</button>
     </div>
   </div>
 </div>

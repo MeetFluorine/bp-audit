@@ -24,6 +24,66 @@ let circleHeadsCache = null;
 // whatever was snapshotted into store_locks at approval time.
 let allProfilesCache = null;
 
+// ============================================================
+// SHARED UI HELPERS — debounce, button loading state, skeletons
+// ============================================================
+
+// Generic debounce: delays calling fn until `wait` ms of silence. Used on
+// search/filter inputs that currently re-run a full table rebuild on every
+// keystroke — this collapses a burst of keystrokes into one render.
+function debounce(fn, wait){
+  let t = null;
+  return function(...args){
+    clearTimeout(t);
+    t = setTimeout(() => fn.apply(this, args), wait);
+  };
+}
+
+// Debounced wrappers for the three search/filter inputs that used to
+// rebuild a full table (or, for the topbar, recompute a store-scope match
+// across every store) on every single keystroke. ~180ms is short enough to
+// feel instant once typing pauses, but collapses a fast typist's burst of
+// keystrokes into a single render instead of one per character.
+const debouncedRenderDashboard = debounce(() => renderDashboard(), 180);
+const debouncedRenderAuditReportPage = debounce(() => renderAuditReportPage(), 180);
+const debouncedHandleTopbarSearch = debounce((value) => handleTopbarSearch(value), 180);
+
+// Puts a button into/out of a locked, spinner-showing state during an async
+// action — disables it (so a slow request can't be double-fired by an
+// impatient second click) and swaps in a CSS spinner via .btn-loading.
+// Usage: setBtnLoading(btn, true) at the start of a handler, and
+// setBtnLoading(btn, false) in a finally block once the request settles.
+function setBtnLoading(btn, isLoading){
+  if(!btn) return;
+  if(isLoading){
+    if(btn.dataset.loading === '1') return; // already loading, don't stack
+    btn.dataset.loading = '1';
+    btn.disabled = true;
+    btn.classList.add('btn-loading');
+  } else {
+    btn.dataset.loading = '0';
+    btn.disabled = false;
+    btn.classList.remove('btn-loading');
+  }
+}
+
+// Toggles the shimmering skeleton look on the dashboard's KPI strip and
+// detail table while a cycle is being fetched, instead of leaving stale
+// numbers/an empty table frozen on screen with only a text status changing.
+function setDashboardSkeleton(isLoading){
+  const kpiStrip = document.getElementById('kpiStrip');
+  if(kpiStrip && isLoading){
+    kpiStrip.innerHTML = Array.from({length:4}).map(() => '<div class="kpi-card skeleton" style="height:92px;"></div>').join('');
+  }
+  const detailBody = document.getElementById('detailTableBody');
+  if(detailBody && isLoading){
+    detailBody.innerHTML = Array.from({length:8}).map(() =>
+      '<tr class="skeleton-row"><td><span></span></td><td><span></span></td><td><span></span></td><td><span></span></td><td><span></span></td><td><span></span></td><td><span></span></td><td><span></span></td><td><span></span></td></tr>'
+    ).join('');
+  }
+}
+
+
 function setDashboardStoreFilter(store){
   dashboardStoreFilter = (dashboardStoreFilter === store) ? null : store;
   renderDashboard();
@@ -115,7 +175,7 @@ function updateTopbarUser(){
   ['sidebarAvatar','topbarAvatar'].forEach(id => {
     const el = document.getElementById(id);
     if(!el) return;
-    if(avatarUrl){ el.innerHTML = `<img src="${avatarUrl}" alt="${name}" class="avatar-img">`; }
+    if(avatarUrl){ el.innerHTML = `<img src="${avatarUrl}" alt="${name}" class="avatar-img" loading="lazy" decoding="async">`; }
     else { el.textContent = initials; }
   });
   const tName = document.getElementById('topbarAvatarName'); if(tName) tName.textContent = name;
@@ -324,7 +384,7 @@ function setAuthMessage(text, isError){
   el.className = 'auth-message ' + (isError ? 'error' : 'ok');
 }
 
-async function handleAuthSubmit(){
+async function handleAuthSubmit(btn){
   if(!sb){ setAuthMessage('Supabase library failed to load — check your connection and reload.', true); return; }
   const email = document.getElementById('authEmail').value.trim();
   const password = document.getElementById('authPassword').value;
@@ -345,6 +405,7 @@ async function handleAuthSubmit(){
   }
 
   setAuthMessage(authMode==='signin' ? 'Signing in…' : 'Creating account…', false);
+  setBtnLoading(btn, true);
   try{
     if(authMode === 'signup'){
       const { data, error } = await sb.auth.signUp({ email, password, options: { data: {
@@ -370,6 +431,8 @@ async function handleAuthSubmit(){
     }
   }catch(e){
     setAuthMessage(errMsg(e), true);
+  } finally {
+    setBtnLoading(btn, false);
   }
 }
 
@@ -767,7 +830,7 @@ async function renderAdminPanel(){
         : u.role === 'circle_head'
           ? `<div class="user-row-stores"><span class="user-row-assign-label">Circles:</span>${circleChips}</div>`
           : `<div class="user-row-stores"><span class="user-row-assign-label" style="color:var(--text-faint);">No store/circle assignment needed for this role.</span></div>`;
-      const avatarHtml = u.avatar_url ? `<img src="${u.avatar_url}" alt="" class="avatar-img">` : initialsFor(u.email, u.full_name);
+      const avatarHtml = u.avatar_url ? `<img src="${u.avatar_url}" alt="" class="avatar-img" loading="lazy" decoding="async">` : initialsFor(u.email, u.full_name);
       const roleOptions = roles.map(r => `<option value="${r}"${u.role===r?' selected':''}>${roleNames[r]}</option>`).join('');
       return `<div class="user-row">
         <input type="checkbox" class="approved-select-box" data-id="${u.id}" ${selectedApprovedIds.has(u.id)?'checked':''} onchange="toggleApprovedSelect('${u.id}', this.checked)" style="margin-top:4px;">
@@ -1075,7 +1138,7 @@ async function renderProfilePanel(){
   if(nameInput) nameInput.value = currentProfile.full_name || '';
   const preview = document.getElementById('avatarPreview');
   if(preview){
-    if(currentProfile.avatar_url) preview.innerHTML = `<img src="${currentProfile.avatar_url}" alt="Avatar" class="avatar-img">`;
+    if(currentProfile.avatar_url) preview.innerHTML = `<img src="${currentProfile.avatar_url}" alt="Avatar" class="avatar-img" loading="lazy" decoding="async">`;
     else preview.textContent = initialsFor(currentUser.email, currentProfile.full_name);
   }
   const removeBtn = document.getElementById('removeAvatarBtn');
@@ -1347,7 +1410,12 @@ async function connectToCycle(cycle){
   dashboardCircleFilter = null;
   adminViewingCircleHead = null;
   updateCycleLabels();
-  await fetchCycleData();
+  setDashboardSkeleton(true);
+  try{
+    await fetchCycleData();
+  } finally {
+    setDashboardSkeleton(false);
+  }
   renderBaseTable();
   populateStoreSelect();
   renderScanView();
@@ -1356,11 +1424,12 @@ async function connectToCycle(cycle){
   subscribeToRealtimeUpdates(cycle.id);
 }
 
-async function handleLoadCycle(){
+async function handleLoadCycle(btn){
   const name = document.getElementById('cycleName').value.trim();
   if(!name){ showMessage('Type a cycle name first, e.g. PV-2026-Q3.', true); return; }
   if(!sb){ showMessage('Supabase library failed to load — check your internet connection and reload the page.', true); return; }
   setSaveIndicator('saving');
+  setBtnLoading(btn, true);
   try{
     const { data: existing, error: findErr } = await sb.from('audit_cycles')
       .select('*').eq('cycle_name', name).order('created_at', {ascending:false}).limit(1);
@@ -1378,14 +1447,17 @@ async function handleLoadCycle(){
   }catch(e){
     console.error(e);
     setSaveIndicator('error', 'Failed: ' + errMsg(e));
+  } finally {
+    setBtnLoading(btn, false);
   }
 }
 
-async function handleCreateCycle(){
+async function handleCreateCycle(btn){
   const name = document.getElementById('cycleName').value.trim();
   if(!name){ showMessage('Type a cycle name first, e.g. PV-2026-Q3.', true); return; }
   if(!sb){ showMessage('Supabase library failed to load — check your internet connection and reload the page.', true); return; }
   setSaveIndicator('saving');
+  setBtnLoading(btn, true);
   try{
     const { data: existing, error: findErr } = await sb.from('audit_cycles')
       .select('id').eq('cycle_name', name).limit(1);
@@ -1407,6 +1479,8 @@ async function handleCreateCycle(){
   }catch(e){
     console.error(e);
     setSaveIndicator('error', 'Failed: ' + errMsg(e));
+  } finally {
+    setBtnLoading(btn, false);
   }
 }
 
@@ -1544,11 +1618,24 @@ function confirmAction(key, label, fn, cancelFn){
   document.getElementById('confirmModalOverlay').style.display = 'flex';
 }
 
-function confirmModalYes(){
-  document.getElementById('confirmModalOverlay').style.display = 'none';
+function confirmModalYes(btn){
+  // Was: closed the modal instantly, then ran the (often async) action —
+  // so a slow confirm (locking a store, deleting a cycle) left the user
+  // staring at nothing for a few seconds with zero feedback. Now the modal
+  // stays open with the Yes button spinning until the action actually
+  // finishes, and Cancel is disabled meanwhile so it can't be closed
+  // mid-action or double-fired by an impatient second click.
   const fn = pendingConfirmFn;
   pendingConfirmFn = null; pendingCancelFn = null;
-  if(fn) fn();
+  if(!fn){ document.getElementById('confirmModalOverlay').style.display = 'none'; return; }
+  setBtnLoading(btn, true);
+  const noBtn = document.getElementById('confirmModalNoBtn');
+  if(noBtn) noBtn.disabled = true;
+  Promise.resolve(fn()).finally(() => {
+    setBtnLoading(btn, false);
+    if(noBtn) noBtn.disabled = false;
+    document.getElementById('confirmModalOverlay').style.display = 'none';
+  });
 }
 
 function confirmModalNo(){
@@ -1828,20 +1915,41 @@ function handleBaseUpload(event){
     // A zero-stock declaration only needs one row per store (per source type); collapse
     // repeats so we don't stack up empty-serial placeholder rows on every re-upload.
     const seenZeroStockStore = new Set();
-    const parsed = parsedForType.filter(r => {
+    const parsedCollapsed = parsedForType.filter(r => {
       if(r.serial) return true;
       if(seenZeroStockStore.has(r.store)) return false;
       seenZeroStockStore.add(r.store);
       return true;
     });
 
+    // Duplicate-serial guard: base_serials has no DB-level unique constraint
+    // (unlike scans), so without this a re-uploaded file or two overlapping
+    // files silently double-count serials and skew Match/Short/Excess. Skip
+    // any serial already present for this store+source (either already
+    // loaded into this cycle, or repeated within this same file).
+    const existingBaseKeys = new Set(
+      baseData.filter(b => b.sourceType === sourceType).map(b => b.store + '::' + normalizeSerial(b.serial))
+    );
+    const seenInFile = new Set();
+    let duplicateBaseCount = 0;
+    const parsed = parsedCollapsed.filter(r => {
+      if(!r.serial) return true; // zero-stock declaration rows already deduped above
+      const key = r.store + '::' + normalizeSerial(r.serial);
+      if(existingBaseKeys.has(key) || seenInFile.has(key)){ duplicateBaseCount++; return false; }
+      seenInFile.add(key);
+      return true;
+    });
+
     if(!parsed.length){
-      showMessage(alreadyInwardCount ? `All ${alreadyInwardCount} rows in this file already have a GRN number — they're already inward (Inventory now), so nothing was uploaded as GRN Pending.` : 'No valid rows found in this file.', true);
+      const reason = duplicateBaseCount
+        ? `All ${duplicateBaseCount} serials in this file are already loaded for this cycle — nothing new to add.`
+        : (alreadyInwardCount ? `All ${alreadyInwardCount} rows in this file already have a GRN number — they're already inward (Inventory now), so nothing was uploaded as GRN Pending.` : 'No valid rows found in this file.');
+      showMessage(reason, true);
       event.target.value = '';
       return;
     }
 
-    document.getElementById('baseUploadStatus').textContent = `Uploading ${parsed.length} ${sourceLabel} rows to Supabase…`;
+    document.getElementById('baseUploadStatus').innerHTML = `<span class="inline-spinner"></span>Uploading ${parsed.length} ${sourceLabel} rows to Supabase…`;
     try{
       const payload = parsed.map(r => ({
         cycle_id: currentCycleId, store_code: r.store, sku: r.sku, description: r.desc, serial_no: r.serial, source_type: sourceType,
@@ -1856,15 +1964,22 @@ function handleBaseUpload(event){
       const invCount = baseData.filter(r=>r.sourceType!=='grn').length;
       const grnCount = baseData.filter(r=>r.sourceType==='grn').length;
       const skippedNote = alreadyInwardCount ? ` (${alreadyInwardCount} row${alreadyInwardCount===1?'':'s'} skipped — already GRN'd/inward, now Inventory.)` : '';
+      const dupNote = duplicateBaseCount ? ` (${duplicateBaseCount} duplicate serial${duplicateBaseCount===1?'':'s'} skipped — already loaded for this cycle.)` : '';
       const outOfScopeNote = outOfScopeCount ? ` (${outOfScopeCount} row${outOfScopeCount===1?'':'s'} outside your circle were skipped.)` : '';
-      document.getElementById('baseUploadStatus').textContent = `Loaded ${parsed.length} ${sourceLabel} rows from ${file.name} (saved to cycle "${currentCycleName}").${skippedNote}${outOfScopeNote} Base data now totals ${baseData.length} rows — ${invCount} Inventory, ${grnCount} GRN pending.`;
+      document.getElementById('baseUploadStatus').textContent = `Loaded ${parsed.length} ${sourceLabel} rows from ${file.name} (saved to cycle "${currentCycleName}").${skippedNote}${dupNote}${outOfScopeNote} Base data now totals ${baseData.length} rows — ${invCount} Inventory, ${grnCount} GRN pending.`;
       renderBaseTable();
       populateStoreSelect();
       event.target.value = '';
     }catch(e){
       console.error(e);
       document.getElementById('baseUploadStatus').textContent = '';
-      showMessage('Could not save base data to Supabase: ' + errMsg(e), true);
+      if(e && e.code === '23505'){
+        showMessage('Some of these serials were just loaded for this cycle by someone else — please re-upload to pick up only the remaining new ones.', true);
+        await fetchCycleData();
+        renderBaseTable();
+      } else {
+        showMessage('Could not save base data to Supabase: ' + errMsg(e), true);
+      }
     }
   });
 }
@@ -1905,7 +2020,9 @@ function handleScanUpload(event){
       return;
     }
 
+    const scanZoneEl = document.getElementById('scanUploadZone');
     try{
+      scanZoneEl && scanZoneEl.classList.add('skeleton');
       const payload = parsed.map(r => ({cycle_id: currentCycleId, store_code: r.store, sku: r.sku, serial_no: r.serial, scanned_by: currentUser ? currentUser.id : null}));
       const chunkSize = 500;
       for(let i=0; i<payload.length; i+=chunkSize){
@@ -1924,6 +2041,8 @@ function handleScanUpload(event){
       } else {
         showMessage('Could not save scanned serials to Supabase: ' + errMsg(e), true);
       }
+    } finally {
+      scanZoneEl && scanZoneEl.classList.remove('skeleton');
     }
   });
   event.target.value = '';
@@ -3102,20 +3221,59 @@ function renderDashboard(){
   }
 
   const rateColor = (pct) => pct>=95 ? 'var(--green)' : pct>=80 ? 'var(--amber)' : 'var(--red)';
+  // Virtualized-ish rendering: a large cycle's detail table can be thousands
+  // of rows. Building + inserting all of them as one giant HTML string used
+  // to visibly jank the browser on render. Instead, render an initial chunk
+  // immediately and grow the table as the user actually scrolls toward the
+  // bottom of its scroll box — most of the time nobody scrolls past the
+  // first screenful anyway, so this also skips work that's often never seen.
+  detailTableRenderState = { rows: searchedDetail, storeStats, rateColor, rendered: 0 };
   const detailBody = document.getElementById('detailTableBody');
-  detailBody.innerHTML = searchedDetail.length ? searchedDetail.map(r => {
-    const st = storeStats[r.store] || {pct:0, lastLabel:'—'};
-    const sourceLabel = r.source === 'grn' ? 'GRN Pending' : r.source === 'inventory' ? 'Inventory' : '—';
-    return `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.physicalSerial||'—'}</td><td>${r.systemSerial||'—'}</td>
+  if(!searchedDetail.length){
+    detailBody.innerHTML = '<tr><td colspan="9" class="empty-note">No matching records.</td></tr>';
+  } else {
+    detailBody.innerHTML = '';
+    renderMoreDetailRows();
+  }
+  attachDetailScrollListener();
+
+  renderCharts(stores, {match, short, excess, matchPct});
+  buildLiveActivity(pendingStores, dashboardStoreFilter, roleScopedStores);
+}
+
+function detailRowHtml(r, storeStats, rateColor){
+  const st = storeStats[r.store] || {pct:0, lastLabel:'—'};
+  const sourceLabel = r.source === 'grn' ? 'GRN Pending' : r.source === 'inventory' ? 'Inventory' : '—';
+  return `<tr><td>${r.store}</td><td>${circleFor(r.store)}</td><td>${r.sku||'—'}</td><td>${r.physicalSerial||'—'}</td><td>${r.systemSerial||'—'}</td>
     <td>${sourceLabel}</td>
     <td><div class="rate-cell"><div class="rate-track"><div class="rate-fill" style="width:${st.pct.toFixed(0)}%;background:${rateColor(st.pct)};"></div></div><span class="rate-text">${st.pct.toFixed(0)}%</span></div></td>
     <td><span class="badge badge-${r.status}">${r.status.charAt(0).toUpperCase()+r.status.slice(1)}</span></td>
     <td>${st.lastLabel}</td></tr>`;
-  }).join('')
-    : '<tr><td colspan="9" class="empty-note">No matching records.</td></tr>';
+}
 
-  renderCharts(stores, {match, short, excess, matchPct});
-  buildLiveActivity(pendingStores, dashboardStoreFilter, roleScopedStores);
+const DETAIL_ROW_CHUNK = 150;
+let detailTableRenderState = { rows: [], storeStats: {}, rateColor: null, rendered: 0 };
+function renderMoreDetailRows(){
+  const state = detailTableRenderState;
+  if(state.rendered >= state.rows.length) return;
+  const detailBody = document.getElementById('detailTableBody');
+  if(!detailBody) return;
+  const next = state.rows.slice(state.rendered, state.rendered + DETAIL_ROW_CHUNK);
+  detailBody.insertAdjacentHTML('beforeend', next.map(r => detailRowHtml(r, state.storeStats, state.rateColor)).join(''));
+  state.rendered += next.length;
+}
+
+let detailScrollListenerAttached = false;
+function attachDetailScrollListener(){
+  if(detailScrollListenerAttached) return;
+  const wrap = document.getElementById('detailTableBody')?.closest('.table-wrap');
+  if(!wrap) return;
+  detailScrollListenerAttached = true;
+  wrap.addEventListener('scroll', debounce(() => {
+    if(wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 120){
+      renderMoreDetailRows();
+    }
+  }, 80), { passive: true });
 }
 
 function renderCharts(stores, healthTotals){
