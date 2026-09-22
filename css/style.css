@@ -427,6 +427,22 @@ body.cap-client .widget-row{grid-template-columns:1fr 1fr;}
 .clear-filter{color:var(--steel);cursor:pointer;margin-left:8px;}
 .clear-filter:hover{text-decoration:underline;}
 .lock-banner{background:var(--amber-bg);border:1px solid var(--amber);color:var(--amber);border-radius:12px;padding:10px 14px;font-size:12.5px;margin-bottom:14px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;}
+
+/* Cycle-comparison trend callout — states the "so what" in one line
+   (direction + magnitude of change) instead of leaving the viewer to
+   read the slope of a line chart themselves. Color follows the same
+   semantic red/amber/green used everywhere else in the app. */
+.insight-banner{border-radius:12px;padding:12px 16px;font-size:13px;margin:14px 0 4px;display:flex;align-items:center;gap:10px;font-weight:600;}
+.insight-banner.insight-bad{background:var(--red-bg);color:var(--red);border:1px solid var(--red);}
+.insight-banner.insight-warn{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);}
+.insight-banner.insight-good{background:var(--green-bg);color:var(--green);border:1px solid var(--green);}
+.insight-banner svg{flex-shrink:0;width:18px;height:18px;}
+.insight-banner .insight-sub{font-weight:400;color:var(--text-dim);margin-left:2px;}
+
+.delta-badge{display:inline-flex;align-items:center;gap:3px;font-weight:600;font-size:12px;}
+.delta-badge.delta-up{color:var(--green);}
+.delta-badge.delta-down{color:var(--red);}
+.delta-badge.delta-flat{color:var(--text-faint);}
 .store-tag-body{margin-left:0;}
 .store-tag-name{font-family:var(--font-display);font-weight:700;font-size:15px;margin:0 0 2px;color:var(--text);}
 .store-tag-meta{font-size:11px;color:var(--text-faint);font-family:var(--font-mono);margin:0 0 12px;}
@@ -487,24 +503,37 @@ body.cap-client .widget-row{grid-template-columns:1fr 1fr;}
    container forcing everything into a single stacked column. */
 #circleRollupCard{display:block;width:100%;}
 .circle-rollup-grid{display:flex;flex-wrap:wrap;gap:14px;width:100%;}
-.circle-rollup-card{flex:1 1 240px;max-width:320px;padding:16px 18px 16px 20px;border:1px solid var(--border);border-left:4px solid var(--steel-dim);border-radius:14px;background:var(--panel-2);cursor:pointer;transition:border-color .15s,transform .15s,box-shadow .15s;}
+.circle-rollup-card{flex:1 1 240px;max-width:320px;padding:16px 18px 16px 20px;border:1px solid var(--border);border-left:4px solid var(--steel-dim);border-radius:14px;background:var(--panel-2);cursor:pointer;transition:border-color .15s,transform .15s,box-shadow .15s;position:relative;}
 .circle-rollup-card:hover{border-color:var(--steel);transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,0,0,.08);}
 .circle-rollup-card:hover{border-left-color:var(--steel);}
 .circle-rollup-card-selected{border-color:var(--steel);border-left-color:var(--steel);box-shadow:0 0 0 2px var(--green-bg);}
-.circle-rollup-name{display:flex;align-items:center;gap:8px;font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text);margin-bottom:6px;}
+.circle-rollup-name{display:flex;align-items:center;gap:8px;font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text);margin-bottom:6px;padding-right:70px;}
 .circle-rollup-name::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--rollup-dot,var(--steel));flex-shrink:0;}
-.circle-rollup-meta{font-size:11px;color:var(--text-faint);margin-bottom:10px;}
+.circle-rollup-meta{font-size:11px;color:var(--text-faint);margin-bottom:8px;}
 .circle-rollup-stats{display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-dim);}
 .circle-rollup-stats b{color:var(--text);}
 .circle-rollup-not-started{color:var(--blue);font-weight:600;}
 
-/* Status tone per card — mirrors the store-card stamp colors (match/variance/
-   critical/zero) so a circle's health reads at a glance from the color alone,
-   not just the numbers. Sets both the left accent bar and the name's dot. */
+/* Completion progress — how much of a circle's stores are actually
+   audited yet, distinct from match quality. A thin filled bar reads
+   faster than the "4/12" fraction alone, and shares the card's status
+   color so progress and quality tell one consistent visual story. */
+.circle-rollup-progress-track{height:6px;border-radius:4px;background:var(--border-soft);overflow:hidden;margin-bottom:10px;}
+.circle-rollup-progress-fill{height:100%;border-radius:4px;background:var(--rollup-dot,var(--steel));transition:width .3s ease;}
+
+/* Status pill — top-right badge naming the state in words, not just
+   color, so it reads at a glance and doesn't rely on color alone. */
+.circle-rollup-status-pill{position:absolute;top:16px;right:16px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:3px 9px;border-radius:20px;white-space:nowrap;}
+
 .circle-rollup-card-match{border-left-color:var(--green);background:linear-gradient(90deg,var(--green-bg) 0%,var(--panel-2) 12%);--rollup-dot:var(--green);}
 .circle-rollup-card-variance{border-left-color:var(--amber);background:linear-gradient(90deg,var(--amber-bg) 0%,var(--panel-2) 12%);--rollup-dot:var(--amber);}
 .circle-rollup-card-critical{border-left-color:var(--red);background:linear-gradient(90deg,var(--red-bg) 0%,var(--panel-2) 12%);--rollup-dot:var(--red);}
 .circle-rollup-card-notstarted{border-left-color:var(--blue);background:linear-gradient(90deg,var(--blue-bg) 0%,var(--panel-2) 12%);--rollup-dot:var(--blue);}
+.circle-rollup-card-match .circle-rollup-status-pill{background:var(--green-bg);color:var(--green);}
+.circle-rollup-card-variance .circle-rollup-status-pill{background:var(--amber-bg);color:var(--amber);}
+.circle-rollup-card-critical .circle-rollup-status-pill{background:var(--red-bg);color:var(--red);}
+.circle-rollup-card-notstarted .circle-rollup-status-pill{background:var(--blue-bg);color:var(--blue);}
+
 
 .approval-row{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);margin-bottom:10px;}
 .approval-row:last-child{margin-bottom:0;}

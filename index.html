@@ -621,7 +621,7 @@
   <div class="panel-view" id="view-compare">
     <div class="card">
       <h4>Compare across audit cycles</h4>
-      <p class="hint">See how match rate trends over time, overall or for a specific store.</p>
+      <p class="hint">See how match, short, and excess rates trend over time, overall or for a specific store.</p>
       <div class="compare-controls">
         <div class="form-field" style="margin:0;">
           <label>Store</label>
@@ -630,7 +630,8 @@
           </select>
         </div>
       </div>
-      <div style="position:relative;height:280px;margin-top:18px;">
+      <div id="compareInsightBanner"></div>
+      <div style="position:relative;height:320px;margin-top:18px;">
         <canvas id="compareTrendChart"></canvas>
       </div>
     </div>
@@ -638,7 +639,7 @@
       <h4>Cycle-by-cycle detail</h4>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Cycle</th><th>Status</th><th>Expected</th><th>Matched</th><th>Short</th><th>Excess</th><th>Match %</th></tr></thead>
+          <thead><tr><th>Cycle</th><th>Status</th><th>Expected</th><th>Matched</th><th>Short</th><th>Excess</th><th>Match %</th><th>Δ vs previous</th></tr></thead>
           <tbody id="compareTableBody"></tbody>
         </table>
       </div>

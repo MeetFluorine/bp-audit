@@ -733,35 +733,119 @@ async function renderCycleComparison(){
       const short = cycleSummaryRows.reduce((s,r)=>s+r.short_count, 0);
       const excess = cycleSummaryRows.reduce((s,r)=>s+r.excess_count, 0);
       const matchPct = expected ? (matched/expected*100) : null;
-      return { cycle, expected, matched, short, excess, matchPct };
+      const shortPct = expected ? (short/expected*100) : null;
+      const excessPct = expected ? (excess/expected*100) : null;
+      return { cycle, expected, matched, short, excess, matchPct, shortPct, excessPct };
     }).filter(r => r.expected > 0 || r.matched > 0); // skip cycles with no data at all for this store
 
-    // Trend chart
+    // ---- Trend insight callout — states the direction + size of the
+    // change in plain language instead of leaving the viewer to read the
+    // chart's slope themselves. Compares the two most recent cycles shown
+    // (the freshest signal) and separately the full span, since a single
+    // bad cycle vs. a sustained multi-cycle slide call for different
+    // reactions.
+    const banner = document.getElementById('compareInsightBanner');
+    const withPct = rows.filter(r => r.matchPct !== null);
+    if(withPct.length >= 2){
+      const latest = withPct[withPct.length - 1], prev = withPct[withPct.length - 2], first = withPct[0];
+      const latestDelta = latest.matchPct - prev.matchPct;
+      const overallDelta = latest.matchPct - first.matchPct;
+      const isDeclining = overallDelta < -5;
+      const isImproving = overallDelta > 5;
+      const tone = latest.matchPct < 80 || overallDelta < -15 ? 'bad' : (isDeclining || latest.matchPct < 95) ? 'warn' : 'good';
+      const icon = tone === 'good'
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17 13.5 8.5 8.5 13.5 2 7"/><path d="M16 17h6v-6"/></svg>';
+      const trendWord = overallDelta < -0.5 ? 'dropped' : overallDelta > 0.5 ? 'improved' : 'held steady';
+      const spanNote = withPct.length > 2
+        ? ` Match rate has ${trendWord} ${Math.abs(overallDelta).toFixed(1)} points since ${first.cycle.cycle_name} (${withPct.length} cycles).`
+        : '';
+      banner.innerHTML = `<div class="insight-banner insight-${tone}">${icon}<span>${latest.cycle.cycle_name}: ${latest.matchPct.toFixed(1)}% match, ${latestDelta >= 0 ? 'up' : 'down'} ${Math.abs(latestDelta).toFixed(1)} pts vs ${prev.cycle.cycle_name}.</span><span class="insight-sub">${spanNote}</span></div>`;
+    } else {
+      banner.innerHTML = '';
+    }
+
+    // Trend chart — match/short/excess all on one axis (all computed as a
+    // % of that cycle's expected count, so they share a scale), plus a
+    // dashed 95% reference line so "healthy" vs "needs attention" is a
+    // glance, not a mental calculation.
     const ctx = document.getElementById('compareTrendChart');
     if(compareTrendChartInstance) compareTrendChartInstance.destroy();
+    const cGreen = themeColor('--green'), cRed = themeColor('--red'), cAmber = themeColor('--amber'), cTextFaint = themeColor('--text-faint');
     compareTrendChartInstance = new Chart(ctx, {
       type: 'line',
       data: {
         labels: rows.map(r => r.cycle.cycle_name),
-        datasets: [{
-          label: 'Match rate %',
-          data: rows.map(r => r.matchPct === null ? null : Number(r.matchPct.toFixed(2))),
-          borderColor: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#16A34A',
-          backgroundColor: 'rgba(22,163,74,0.12)',
-          tension: 0.3, fill: true, spanGaps: true,
-          pointRadius: 4, pointHoverRadius: 6
-        }]
+        datasets: [
+          {
+            label: 'Match rate %',
+            data: rows.map(r => r.matchPct === null ? null : Number(r.matchPct.toFixed(2))),
+            borderColor: cGreen, backgroundColor: 'rgba(30,158,90,0.10)',
+            tension: 0.3, fill: true, spanGaps: true,
+            pointRadius: 4, pointHoverRadius: 6, order: 1
+          },
+          {
+            label: 'Short %',
+            data: rows.map(r => r.shortPct === null ? null : Number(r.shortPct.toFixed(2))),
+            borderColor: cRed, backgroundColor: 'transparent',
+            tension: 0.3, fill: false, spanGaps: true,
+            pointRadius: 3, pointHoverRadius: 5, borderDash: [], order: 2
+          },
+          {
+            label: 'Excess %',
+            data: rows.map(r => r.excessPct === null ? null : Number(r.excessPct.toFixed(2))),
+            borderColor: cAmber, backgroundColor: 'transparent',
+            tension: 0.3, fill: false, spanGaps: true,
+            pointRadius: 3, pointHoverRadius: 5, borderDash: [], order: 3
+          },
+          {
+            label: 'Target (95%)',
+            data: rows.map(() => 95),
+            borderColor: cTextFaint, backgroundColor: 'transparent',
+            borderDash: [6,5], borderWidth: 1.5, pointRadius: 0, pointHitRadius: 0,
+            fill: false, order: 4
+          }
+        ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } },
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.raw === null ? 'No data' : ctx.raw + '% matched' } } }
+        plugins: {
+          legend: { display: true, position: 'top', align: 'end', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                if(ctx.raw === null) return `${ctx.dataset.label}: no data`;
+                if(ctx.dataset.label === 'Target (95%)') return null;
+                const r = rows[ctx.dataIndex];
+                const countMap = { 'Match rate %': r.matched, 'Short %': r.short, 'Excess %': r.excess };
+                return `${ctx.dataset.label}: ${ctx.raw}% (${countMap[ctx.dataset.label]} units)`;
+              },
+              filter: (ctx) => ctx.dataset.label !== 'Target (95%)'
+            }
+          }
+        }
       }
     });
 
-    // Detail table
+    // Detail table — Δ vs previous cycle shown as a colored badge so a
+    // decline reads as red at a glance, not just a smaller number next to
+    // last row's bigger number.
     const tbody = document.getElementById('compareTableBody');
-    tbody.innerHTML = rows.length ? rows.slice().reverse().map(r => `
+    const chronological = rows.slice();
+    tbody.innerHTML = rows.length ? rows.slice().reverse().map(r => {
+      const idx = chronological.indexOf(r);
+      const prevRow = idx > 0 ? chronological[idx-1] : null;
+      let deltaHtml = '<span class="delta-badge delta-flat">—</span>';
+      if(prevRow && r.matchPct !== null && prevRow.matchPct !== null){
+        const d = r.matchPct - prevRow.matchPct;
+        const dir = d > 0.5 ? 'up' : d < -0.5 ? 'down' : 'flat';
+        const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '—';
+        deltaHtml = `<span class="delta-badge delta-${dir}">${arrow} ${Math.abs(d).toFixed(1)} pts</span>`;
+      }
+      const matchColor = r.matchPct === null ? 'var(--text-faint)' : r.matchPct >= 95 ? 'var(--green)' : r.matchPct >= 80 ? 'var(--amber)' : 'var(--red)';
+      return `
       <tr>
         <td>${r.cycle.cycle_name}</td>
         <td><span class="badge ${r.cycle.completed ? 'badge-match' : 'badge-open'}">${r.cycle.completed ? 'Completed' : 'Live'}</span></td>
@@ -769,9 +853,11 @@ async function renderCycleComparison(){
         <td>${r.matched}</td>
         <td>${r.short}</td>
         <td>${r.excess}</td>
-        <td>${r.matchPct === null ? '—' : r.matchPct.toFixed(2) + '%'}</td>
-      </tr>`).join('')
-      : '<tr><td colspan="7" class="empty-note">No cycle data yet for this filter.</td></tr>';
+        <td style="color:${matchColor};font-weight:600;">${r.matchPct === null ? '—' : r.matchPct.toFixed(2) + '%'}</td>
+        <td>${deltaHtml}</td>
+      </tr>`;
+    }).join('')
+      : '<tr><td colspan="8" class="empty-note">No cycle data yet for this filter.</td></tr>';
   }catch(e){
     console.error(e);
     showMessage('Could not load cycle comparison: ' + errMsg(e), true);
@@ -2842,7 +2928,8 @@ function renderCircleHeadCards(){
   if(!circleHeadsCache || !circleHeadsCache.length){
     const allCircles = [...new Set(Object.values(STORE_MASTER))];
     return `<div class="empty-note">No Circle Heads set up yet — assign the role and circles from Users &amp; Stores. Showing ${allCircles.length} unassigned circle${allCircles.length===1?'':'s'}.</div>` +
-      `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})'>
+    `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})'>
+        <span class="circle-rollup-status-pill">Unassigned</span>
         <div class="circle-rollup-name">Unassigned</div>
         <div class="circle-rollup-meta">${allCircles.length} circle${allCircles.length===1?'':'s'} · no Circle Head yet</div>
       </div>`;
@@ -2858,6 +2945,7 @@ function renderCircleHeadCards(){
     const sh = rows.filter(r=>r.status==='short').length;
     const ex = rows.filter(r=>r.status==='excess').length;
     const pct = (m+sh+ex) ? (m/(m+sh+ex)*100) : 100;
+    const completionPct = headStores.length ? (headAudited.length/headStores.length*100) : 0;
     // 0 audited stores is "hasn't started/submitted yet" — a very different
     // situation from "100% match", which is what m/sh/ex all being 0 reads
     // as. Say so plainly instead of implying everything's fine.
@@ -2865,13 +2953,20 @@ function renderCircleHeadCards(){
       ? `<span class="circle-rollup-not-started">Not submitted / Not audited yet</span>`
       : `<span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span>`;
     const statusCls = rollupStatusClass(headAudited.length, sh, ex, m+sh+ex);
+    const statusLabel = statusCls === 'circle-rollup-card-notstarted' ? 'Not started'
+      : statusCls === 'circle-rollup-card-critical' ? 'Critical'
+      : statusCls === 'circle-rollup-card-variance' ? 'Needs review'
+      : 'On track';
     return `<div class="circle-rollup-card ${statusCls}" onclick='viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})'>
+      <span class="circle-rollup-status-pill">${statusLabel}</span>
       <div class="circle-rollup-name">${head.name}</div>
-      <div class="circle-rollup-meta">${head.circles.join(', ')} · ${headAudited.length}/${headStores.length} stores audited</div>
+      <div class="circle-rollup-meta">${head.circles.join(', ')} · ${headAudited.length}/${headStores.length} stores audited · ${completionPct.toFixed(0)}% complete</div>
+      <div class="circle-rollup-progress-track"><div class="circle-rollup-progress-fill" style="width:${completionPct.toFixed(0)}%;"></div></div>
       <div class="circle-rollup-stats">${statsLine}</div>
     </div>`;
   }).join('');
   const unassignedCard = unassigned.length ? `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})'>
+      <span class="circle-rollup-status-pill">Unassigned</span>
       <div class="circle-rollup-name">Unassigned</div>
       <div class="circle-rollup-meta">${unassigned.join(', ')} · no Circle Head yet</div>
     </div>` : '';
