@@ -3114,6 +3114,7 @@ function renderDashboard(){
   // circle(s), or an admin's drilled-in Circle Head territory.
   const progressScopeStores = isAdminUser
     ? [...new Set([...allStoreAssignments.map(a=>normalizeStoreCode(a.store_code)), ...totalBaseStores])]
+    : isClientUser() ? Object.keys(STORE_MASTER)
     : roleScopedStores ? [...roleScopedStores]
     : myAssignedStores.slice();
   const progressCompletedStores = progressScopeStores.filter(s => storeLocks.some(l => l.store === s));
@@ -3243,18 +3244,43 @@ function renderDashboard(){
   // Admin sees cards grouped by the PERSON managing a circle (Circle Head
   // Summary) — clicking drills into that person's whole territory, which can
   // span several circles. A circle head sees their own circles directly
-  // (Circle Summary), same as before, each still clickable down to the
-  // store-card grid below. Either way this stays out of the client's view —
-  // it's an operational tool, not something a client needs.
+  // (Circle Summary). A client sees a company-wide, circle-by-circle view —
+  // submission progress only while the cycle is still live (match/short/
+  // excess isn't final yet), full quality detail once it's complete, same
+  // rule the rest of the client's dashboard already follows.
   const rollupEl = document.getElementById('circleRollupGrid');
   const rollupTitleEl = document.getElementById('circleRollupTitle');
   const drillBannerEl = document.getElementById('circleDrillBanner');
   if(rollupEl){
-    if(clientLiveGate){
-      rollupEl.innerHTML = `<div class="empty-note">Circle-level detail appears once this cycle is marked complete.</div>`;
+    // Reset title/banner on every render, before any branch below — so a
+    // leftover admin drill-in state (or any future role this doesn't
+    // explicitly handle) can never leak its heading/back-button into a
+    // different role's view. This is what let a client once see a stale
+    // "<Circle Head>'s Territory" heading with a "Back to Circle Head
+    // Summary" button that made no sense for their account.
+    if(rollupTitleEl) rollupTitleEl.textContent = 'Circle Summary';
+    if(drillBannerEl) drillBannerEl.innerHTML = '';
+    rollupEl.innerHTML = '';
+
+    if(isClientUser()){
+      const allCircles = [...new Set(Object.values(STORE_MASTER))].sort();
+      if(clientLiveGate){
+        rollupEl.innerHTML = allCircles.map(circle => {
+          const circleStores = Object.keys(STORE_MASTER).filter(s => circleFor(s) === circle);
+          const circleLocked = circleStores.filter(s => lockedStoreCodes.has(s));
+          const pct = circleStores.length ? (circleLocked.length/circleStores.length*100) : 0;
+          const cls = pct >= 100 ? 'circle-rollup-card-match' : pct > 0 ? 'circle-rollup-card-variance' : 'circle-rollup-card-notstarted';
+          return `<div class="${'circle-rollup-card '+cls}" style="cursor:default;">
+            <div class="circle-rollup-name">${circle}</div>
+            <div class="circle-rollup-meta">${circleLocked.length}/${circleStores.length} stores submitted · ${pct.toFixed(0)}% complete</div>
+            <div class="circle-rollup-progress-track"><div class="circle-rollup-progress-fill" style="width:${pct.toFixed(0)}%;"></div></div>
+          </div>`;
+        }).join('');
+      } else {
+        rollupEl.innerHTML = renderCircleCards(allCircles);
+      }
     } else if(isAppAdmin() && !adminViewingCircleHead){
       if(rollupTitleEl) rollupTitleEl.textContent = 'Circle Head Summary';
-      if(drillBannerEl) drillBannerEl.innerHTML = '';
       if(circleHeadsCache === null){
         rollupEl.innerHTML = '<div class="empty-note">Loading circle heads…</div>';
         loadCircleHeadsForAdmin();
@@ -3266,8 +3292,6 @@ function renderDashboard(){
       if(drillBannerEl) drillBannerEl.innerHTML = `<button class="btn" style="margin-bottom:14px;" onclick="clearCircleHeadDrill()">← Back to Circle Head Summary</button>`;
       rollupEl.innerHTML = renderCircleCards(adminViewingCircleHead.circles);
     } else if(isCircleHeadUser()){
-      if(rollupTitleEl) rollupTitleEl.textContent = 'Circle Summary';
-      if(drillBannerEl) drillBannerEl.innerHTML = '';
       rollupEl.innerHTML = renderCircleCards(myAssignedCircles);
     }
   }
