@@ -765,62 +765,92 @@ async function renderCycleComparison(){
       banner.innerHTML = '';
     }
 
-    // Trend chart — match/short/excess all on one axis (all computed as a
-    // % of that cycle's expected count, so they share a scale), plus a
-    // dashed 95% reference line so "healthy" vs "needs attention" is a
-    // glance, not a mental calculation.
+    // Trend chart — grouped bars of the actual Matched/Short/Excess UNIT
+    // COUNTS per cycle (not just percentages), each bar labeled with its
+    // value directly, plus a Match-rate % line overlaid on a secondary axis
+    // so volume and rate are both visible in one view.
     const ctx = document.getElementById('compareTrendChart');
     if(compareTrendChartInstance) compareTrendChartInstance.destroy();
-    const cGreen = themeColor('--green'), cRed = themeColor('--red'), cAmber = themeColor('--amber'), cTextFaint = themeColor('--text-faint');
+    const cGreen = themeColor('--green'), cRed = themeColor('--red'), cAmber = themeColor('--amber'), cSteel = themeColor('--steel'), cText = themeColor('--text'), cTextFaint = themeColor('--text-faint');
+
+    // Draws each bar's value centered just above it — Chart.js has no
+    // built-in data-label support, so this is a small local plugin rather
+    // than pulling in a whole extra library for one feature.
+    const barValueLabelPlugin = {
+      id: 'barValueLabels',
+      afterDatasetsDraw(chart){
+        const { ctx } = chart;
+        chart.data.datasets.forEach((ds, i) => {
+          if(ds.type === 'line') return; // only label the count bars
+          const meta = chart.getDatasetMeta(i);
+          if(meta.hidden) return;
+          ctx.save();
+          ctx.fillStyle = cText;
+          ctx.font = '600 11px var(--font-body), sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          meta.data.forEach((bar, idx) => {
+            const val = ds.data[idx];
+            if(val === null || val === undefined) return;
+            ctx.fillText(val.toLocaleString(), bar.x, bar.y - 5);
+          });
+          ctx.restore();
+        });
+      }
+    };
+
     compareTrendChartInstance = new Chart(ctx, {
-      type: 'line',
+      type: 'bar',
       data: {
         labels: rows.map(r => r.cycle.cycle_name),
         datasets: [
           {
-            label: 'Match rate %',
-            data: rows.map(r => r.matchPct === null ? null : Number(r.matchPct.toFixed(2))),
-            borderColor: cGreen, backgroundColor: 'rgba(30,158,90,0.10)',
-            tension: 0.3, fill: true, spanGaps: true,
-            pointRadius: 4, pointHoverRadius: 6, order: 1
+            type: 'bar', label: 'Matched', data: rows.map(r => r.matched),
+            backgroundColor: cGreen, borderRadius: 4, yAxisID: 'y', order: 2,
+            maxBarThickness: 46
           },
           {
-            label: 'Short %',
-            data: rows.map(r => r.shortPct === null ? null : Number(r.shortPct.toFixed(2))),
-            borderColor: cRed, backgroundColor: 'transparent',
+            type: 'bar', label: 'Short', data: rows.map(r => r.short),
+            backgroundColor: cRed, borderRadius: 4, yAxisID: 'y', order: 2,
+            maxBarThickness: 46
+          },
+          {
+            type: 'bar', label: 'Excess', data: rows.map(r => r.excess),
+            backgroundColor: cAmber, borderRadius: 4, yAxisID: 'y', order: 2,
+            maxBarThickness: 46
+          },
+          {
+            type: 'line', label: 'Match rate %', data: rows.map(r => r.matchPct === null ? null : Number(r.matchPct.toFixed(1))),
+            borderColor: cSteel, backgroundColor: cSteel, yAxisID: 'y1',
             tension: 0.3, fill: false, spanGaps: true,
-            pointRadius: 3, pointHoverRadius: 5, borderDash: [], order: 2
+            pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: cSteel,
+            borderWidth: 2.5, order: 1
           },
           {
-            label: 'Excess %',
-            data: rows.map(r => r.excessPct === null ? null : Number(r.excessPct.toFixed(2))),
-            borderColor: cAmber, backgroundColor: 'transparent',
-            tension: 0.3, fill: false, spanGaps: true,
-            pointRadius: 3, pointHoverRadius: 5, borderDash: [], order: 3
-          },
-          {
-            label: 'Target (95%)',
-            data: rows.map(() => 95),
+            type: 'line', label: 'Target (95%)', data: rows.map(() => 95), yAxisID: 'y1',
             borderColor: cTextFaint, backgroundColor: 'transparent',
             borderDash: [6,5], borderWidth: 1.5, pointRadius: 0, pointHitRadius: 0,
-            fill: false, order: 4
+            fill: false, order: 3
           }
         ]
       },
+      plugins: [barValueLabelPlugin],
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } },
+        layout: { padding: { top: 18 } },
+        scales: {
+          y: { beginAtZero: true, title: { display: true, text: 'Units', font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          y1: { beginAtZero: true, max: 100, position: 'right', title: { display: true, text: 'Match %', font: { size: 11 } }, ticks: { callback: v => v + '%' }, grid: { drawOnChartArea: false } }
+        },
         plugins: {
-          legend: { display: true, position: 'top', align: 'end', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, font: { size: 11 } } },
+          legend: { display: true, position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, font: { size: 11 }, padding: 16 } },
           tooltip: {
             callbacks: {
               label: (ctx) => {
-                if(ctx.raw === null) return `${ctx.dataset.label}: no data`;
                 if(ctx.dataset.label === 'Target (95%)') return null;
-                const r = rows[ctx.dataIndex];
-                const countMap = { 'Match rate %': r.matched, 'Short %': r.short, 'Excess %': r.excess };
-                return `${ctx.dataset.label}: ${ctx.raw}% (${countMap[ctx.dataset.label]} units)`;
+                if(ctx.raw === null) return `${ctx.dataset.label}: no data`;
+                return ctx.dataset.type === 'line' ? `${ctx.dataset.label}: ${ctx.raw}%` : `${ctx.dataset.label}: ${ctx.raw.toLocaleString()} units`;
               },
               filter: (ctx) => ctx.dataset.label !== 'Target (95%)'
             }
