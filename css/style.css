@@ -746,3 +746,19 @@ body.cap-client .cap-client-only{display:inline-flex;}
   justify-content: center;
   gap: 4px;
 }
+
+/* ---- Stores & Circles + reopen (stores build) ---- */
+/* Reopen history rows inside the reopen dialog. */
+.reopen-history-row{padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:12.5px;}
+.reopen-history-row:last-child{border-bottom:none;}
+/* Stores & Circles page: circle manager chips (own class — the existing
+   .circle-chip is the small clickable picker chip used by bulk assign). */
+.stores-circle-chip{display:inline-flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:6px 6px 6px 12px;font-size:12.5px;}
+.circle-chip-inactive{opacity:.6;}
+.stores-inactive-row{opacity:.6;}
+.stores-assign-list{display:flex;flex-direction:column;gap:12px;}
+.stores-assign-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-soft);}
+.stores-assign-row:last-child{border-bottom:none;}
+.stores-assign-who{display:flex;flex-direction:column;min-width:200px;}
+.stores-assign-who span{font-size:11.5px;color:var(--text-faint);}
+.stores-assign-chips{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:200px;}
