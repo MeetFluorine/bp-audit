@@ -9,6 +9,55 @@ let allStoreAssignments = [];
 let detailResults = [];
 let reconciledStores = []; // every store that counts as "audited" for this cycle — scanned, locked, or declared zero-stock — even when it has 0 rows in detailResults
 let auditCompleted = false;
+
+// ---------------- STORE DIRECTORY (DB-backed, config fallback) ----------------
+// The store/circle master used to live only in js/config.js (STORE_MASTER).
+// Admins can now manage it from the Stores & Circles page, so the live
+// directory comes from the public.stores table when it can be read, with
+// STORE_MASTER as the fallback (e.g. before the migration that adds the
+// name/active/type columns has been run — select * still works there, the
+// new columns just default in the client).
+let STORE_DIR = null;   // null = not loaded yet; otherwise [{code, name, circle, type, active}]
+let CIRCLES_DIR = null; // null = circles table not available yet (pre-migration); otherwise [{code, name, active}]
+async function loadStoreDirectory(){
+  try{
+    const { data, error } = await sb.from('stores').select('*').order('store_code');
+    if(error) throw error;
+    const dir = (data||[]).map(r => ({ code: normalizeStoreCode(r.store_code), name: r.name || normalizeStoreCode(r.store_code), circle: r.circle, type: r.store_type || '', active: r.active !== false }));
+    if(dir.length){
+      STORE_DIR = dir;
+      // Sync the built-in master in place (const blocks rebinding, not
+      // mutation) so every existing Object.keys(STORE_MASTER) site — reports,
+      // readiness, rollups — automatically sees UI-added stores too.
+      Object.keys(STORE_MASTER).forEach(k => delete STORE_MASTER[k]);
+      dir.forEach(s => { STORE_MASTER[s.code] = s.circle; });
+    }
+  }catch(e){ console.warn('Store directory fell back to built-in master list', e); STORE_DIR = null; }
+  try{
+    const { data, error } = await sb.from('circles').select('*').order('code');
+    if(error) throw error;
+    CIRCLES_DIR = (data||[]).map(r => ({ code: r.code, name: r.name || r.code, active: r.active !== false }));
+  }catch(e){ CIRCLES_DIR = null; }
+}
+// Directory views — operational lists (dropdowns, readiness, progress)
+// use ACTIVE stores only; reports/history include inactive stores too,
+// because their data must stay visible after a store leaves the list.
+function storeDirectory(){
+  if(STORE_DIR) return STORE_DIR;
+  return Object.entries(STORE_MASTER).map(([code, circle]) => ({ code, name: code, circle, type: '', active: true }));
+}
+function storeEntry(code){ return storeDirectory().find(s => s.code === normalizeStoreCode(code)) || null; }
+function activeStoreCodes(){ return storeDirectory().filter(s => s.active).map(s => s.code).sort(); }
+function allCirclesList(){
+  const fromStores = [...new Set(storeDirectory().map(s => s.circle))].filter(Boolean);
+  const fromTable = (CIRCLES_DIR||[]).filter(c => c.active).map(c => c.code);
+  return [...new Set([...fromTable, ...fromStores])].sort();
+}
+function allCirclesListWithInactive(){
+  const fromStores = [...new Set(storeDirectory().map(s => s.circle))].filter(Boolean);
+  const fromTable = (CIRCLES_DIR||[]).map(c => c.code);
+  return [...new Set([...fromTable, ...fromStores])].sort();
+}
 let dashboardStoreFilter = null;
 
 // Admin's "Circle Head Summary" drill state: null = showing all circle
@@ -304,7 +353,7 @@ function isAuditorUser(){ return !!(currentProfile && currentProfile.role === 'u
 // Fallbacks are each role's home page, and every fallback is in its own
 // role's allowed list, so a guard redirect can never loop.
 const ROUTE_ALLOWED_BY_ROLE = {
-  admin: ['setup','scan','dashboard','admin','profile','compare','auditreport'],
+  admin: ['setup','scan','dashboard','admin','stores','profile','compare','auditreport'],
   circle_head: ['dashboard','setup','scan','approvals','profile'],
   client: ['dashboard','profile'],
   user: ['setup','scan','mystores','profile']
@@ -383,7 +432,7 @@ function handleAuthRoleChange(){
 function populateAuthStoreSelect(){
   const sel = document.getElementById('authStore');
   if(!sel || sel.options.length) return; // populate once
-  const stores = Object.keys(STORE_MASTER).sort();
+  const stores = activeStoreCodes();
   sel.innerHTML = stores.map(s => `<option value="${s}">${s} (${circleFor(s)})</option>`).join('');
 }
 
@@ -588,6 +637,10 @@ async function onLoginSuccess(knownUser){
       myAssignedStores = [];
       myAssignedCircles = [];
     }
+    // Load the DB-backed store/circle directory BEFORE the first render,
+    // so dropdowns, readiness and progress all use the managed master list
+    // (with the built-in list as silent fallback).
+    await loadStoreDirectory();
     const landing = allowed.includes(requestedStep) ? requestedStep : defaultByRole[profile.role];
     showStep(landing, true);
 
@@ -968,8 +1021,8 @@ async function renderAdminPanel(){
     const { data: allCircleAssignments, error: circleAssignErr } = await sb.from('user_circles').select('*');
     if(circleAssignErr) throw circleAssignErr;
 
-    const storeCodes = Object.keys(STORE_MASTER).sort();
-    const circleCodes = [...new Set(Object.values(STORE_MASTER))].sort();
+    const storeCodes = activeStoreCodes();
+    const circleCodes = allCirclesList();
     const roles = ['user','circle_head','client','admin'];
     const roleNames = {user:'Auditor', circle_head:'Circle Head', client:'Client', admin:'Admin'};
     const listEl = document.getElementById('approvedUsersList');
@@ -1078,6 +1131,219 @@ async function adminDeleteUser(userId, email){
       showMessage('Could not delete user: ' + errMsg(e), true);
     }
   });
+}
+
+// ---------------- STORES & CIRCLES (admin) ----------------
+// The master list admins used to edit only by changing js/config.js.
+// Stores are deactivated, never deleted: base_serials, scans, locks and
+// assignments all reference the store code, so a hard delete would either
+// fail on FKs or orphan history. A deactivated store disappears from
+// dropdowns, readiness and progress but stays visible in reports.
+let storesPageEditCode = null;
+function storesWriteHint(e){
+  const msg = errMsg(e);
+  if(/row-level security|policy|permission denied|does not exist/i.test(msg)){
+    return 'Stores & Circles writes need supabase/add_stores_circles_reopen.sql run in Supabase first — reading already works, saving does not until then. (' + msg + ')';
+  }
+  return msg;
+}
+async function renderStoresPage(){
+  if(!currentProfile || currentProfile.role !== 'admin') return;
+  const wrap = document.getElementById('storesPageBody');
+  if(!wrap) return;
+  await loadStoreDirectory(); // fresh: another admin may have changed it
+  const dir = storeDirectory();
+  const circles = allCirclesListWithInactive();
+  const circleEntries = (CIRCLES_DIR || []).length ? CIRCLES_DIR : circles.map(c => ({code:c, name:c, active:true}));
+
+  // Circle manager — deactivate is blocked while active stores still
+  // live in that circle (reassign them first), so a circle can never
+  // silently strand stores.
+  const circleChips = circleEntries.map(c => {
+    const storesHere = dir.filter(s => s.circle === c.code && s.active).map(s => s.code);
+    const toggleBtn = c.active
+      ? `<button class="btn" onclick="storesPageSetCircleActive('${c.code}', false)" ${storesHere.length ? `disabled title="Move these stores out first: ${storesHere.join(', ')}"` : ''}>Deactivate</button>`
+      : `<button class="btn" onclick="storesPageSetCircleActive('${c.code}', true)">Reactivate</button>`;
+    return `<span class="stores-circle-chip ${c.active ? '' : 'circle-chip-inactive'}">${c.code}${c.name && c.name !== c.code ? ` · ${escapeHtml(c.name)}` : ''} ${c.active ? '' : '(inactive)'} ${toggleBtn}</span>`;
+  }).join('');
+
+  const rows = dir.slice().sort((a,b) => a.code.localeCompare(b.code)).map(s => {
+    if(storesPageEditCode === s.code){
+      return `<tr class="stores-edit-row"><td><b>${s.code}</b></td>
+        <td><input id="storesEditName" value="${escapeHtml(s.name)}"></td>
+        <td><select id="storesEditCircle">${circles.map(c => `<option value="${c}"${c===s.circle?' selected':''}>${c}</option>`).join('')}</select></td>
+        <td><input id="storesEditType" value="${escapeHtml(s.type)}" placeholder="e.g. Exclusive"></td>
+        <td><span class="badge badge-${s.active?'match':'short'}">${s.active?'Active':'Inactive'}</span></td>
+        <td><div class="btn-row"><button class="btn btn-primary" onclick="storesPageSaveEdit('${s.code}')">Save</button><button class="btn" onclick="storesPageCancelEdit()">Cancel</button></div></td></tr>`;
+    }
+    return `<tr class="${s.active ? '' : 'stores-inactive-row'}"><td><b>${s.code}</b></td>
+      <td>${escapeHtml(s.name)}</td><td>${s.circle}</td><td>${s.type ? escapeHtml(s.type) : '—'}</td>
+      <td><span class="badge badge-${s.active?'match':'short'}">${s.active?'Active':'Inactive'}</span></td>
+      <td><div class="btn-row">
+        <button class="btn" onclick="storesPageStartEdit('${s.code}')">Edit</button>
+        ${s.active
+          ? `<button class="btn btn-danger" onclick="storesPageRemoveStore('${s.code}')">Remove</button>`
+          : `<button class="btn" onclick="storesPageReactivateStore('${s.code}')">Reactivate</button>`}
+      </div></td></tr>`;
+  }).join('');
+
+  // Store-user assignment panel — auditors only (circle heads get circles
+  // on the Users & Stores page). Same user_stores rows, same admin RLS.
+  let assignHtml = '<div class="empty-note">Could not load auditors.</div>';
+  try{
+    const { data: auditors, error: aErr } = await sb.from('profiles').select('id,email,full_name').eq('role','user').eq('approved', true).order('email');
+    if(aErr) throw aErr;
+    const { data: assigns, error: sErr } = await sb.from('user_stores').select('*');
+    if(sErr) throw sErr;
+    const activeCodes = activeStoreCodes();
+    assignHtml = (auditors||[]).length ? (auditors||[]).map(u => {
+      const mine = (assigns||[]).filter(a => a.user_id === u.id).map(a => normalizeStoreCode(a.store_code));
+      const unassigned = activeCodes.filter(c => !mine.includes(c));
+      return `<div class="stores-assign-row">
+        <div class="stores-assign-who"><b>${displayNameFor(u.email, u.full_name)}</b><span>${u.email}</span></div>
+        <div class="stores-assign-chips">${mine.length ? mine.map(c => `<span class="store-chip active">${c} <span style="cursor:pointer;" onclick="storesPageUnassignStore('${u.id}','${c}')">✕</span></span>`).join('') : '<span style="color:var(--text-faint);">No stores assigned</span>'}</div>
+        <div class="btn-row"><select id="stores-assign-select-${u.id}"><option value="">Add a store…</option>${unassigned.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+        <button class="btn btn-primary" onclick="storesPageAssignStore('${u.id}')">Assign</button></div>
+      </div>`;
+    }).join('') : '<div class="empty-note">No approved auditors yet.</div>';
+  }catch(e){ console.warn('Stores assignment panel failed', e); }
+
+  wrap.innerHTML = `
+    <div class="card">
+      <h4>Circle manager</h4>
+      <p class="hint">Circles group stores for circle-head access. Deactivating a circle is blocked while active stores still belong to it — move those stores to another circle first.</p>
+      <div class="circle-chip-row">${circleChips || '<span style="color:var(--text-faint);">No circles yet.</span>'}</div>
+      <div class="btn-row" style="margin-top:12px;">
+        <input id="storesNewCircleCode" placeholder="New circle code (e.g. UPE)" style="max-width:180px;">
+        <input id="storesNewCircleName" placeholder="Circle name (optional)" style="max-width:220px;">
+        <button class="btn btn-primary" onclick="storesPageAddCircle()">+ Add circle</button>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Stores <span style="color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400;">(${dir.filter(s=>s.active).length} active · ${dir.length} total)</span></h4>
+      <p class="hint">Remove hides a store from every dropdown, readiness check and progress count — its past audit data stays visible in reports. Nothing here deletes a store.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Store code</th><th>Display name</th><th>Circle</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <h4 style="margin-top:20px;">+ Add store</h4>
+      <div class="btn-row" style="flex-wrap:wrap;">
+        <input id="storesNewCode" placeholder="Store code (e.g. SFXNEW)" style="max-width:180px;">
+        <input id="storesNewName" placeholder="Display name (optional)" style="max-width:200px;">
+        <select id="storesNewCircle" style="max-width:140px;">${circles.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+        <input id="storesNewType" placeholder="Type (optional)" style="max-width:140px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="storesNewActive" checked> Active</label>
+        <button class="btn btn-primary" onclick="storesPageAddStore()">Add store</button>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Store-user assignment</h4>
+      <p class="hint">Which stores each auditor can scan. Changes apply immediately; a deactivated store is hidden from auditors even if still assigned here.</p>
+      <div class="stores-assign-list">${assignHtml}</div>
+    </div>`;
+}
+function storesPageStartEdit(code){ storesPageEditCode = code; renderStoresPage(); }
+function storesPageCancelEdit(){ storesPageEditCode = null; renderStoresPage(); }
+async function storesPageSaveEdit(code){
+  const name = (document.getElementById('storesEditName').value || '').trim();
+  const circle = document.getElementById('storesEditCircle').value;
+  const type = (document.getElementById('storesEditType').value || '').trim();
+  try{
+    const { error } = await sb.from('stores').update({ name: name || code, circle, store_type: type || null }).eq('store_code', code);
+    if(error) throw error;
+    storesPageEditCode = null;
+    showMessage(`${code} updated.`);
+    await loadStoreDirectory();
+    renderStoresPage();
+    renderBaseTable();
+    populateStoreSelect();
+  }catch(e){ console.error(e); showMessage('Could not update store: ' + storesWriteHint(e), true); }
+}
+async function storesPageAddStore(){
+  const code = normalizeStoreCode(document.getElementById('storesNewCode').value);
+  const name = (document.getElementById('storesNewName').value || '').trim();
+  const circle = document.getElementById('storesNewCircle').value;
+  const type = (document.getElementById('storesNewType').value || '').trim();
+  const active = document.getElementById('storesNewActive').checked;
+  if(!code){ showMessage('Enter a store code first.', true); return; }
+  if(storeEntry(code)){ showMessage(`Store ${code} already exists in the list.`, true); return; }
+  try{
+    const { error } = await sb.from('stores').insert({ store_code: code, name: name || code, circle, store_type: type || null, active });
+    if(error) throw error;
+    showMessage(`${code} added to the store list.`);
+    await loadStoreDirectory();
+    renderStoresPage();
+    renderBaseTable();
+    populateStoreSelect();
+  }catch(e){ console.error(e); showMessage('Could not add store: ' + storesWriteHint(e), true); }
+}
+async function storesPageRemoveStore(code){
+  confirmAction('remove-store-'+code, `This removes ${code} from the active list — its past audit data stays visible in reports`, async () => {
+    try{
+      const { error } = await sb.from('stores').update({ active: false }).eq('store_code', code);
+      if(error) throw error;
+      showMessage(`${code} removed from the active list.`);
+      await loadStoreDirectory();
+      renderStoresPage();
+      renderBaseTable();
+      populateStoreSelect();
+      renderDashboard();
+    }catch(e){ console.error(e); showMessage('Could not remove store: ' + storesWriteHint(e), true); }
+  });
+}
+async function storesPageReactivateStore(code){
+  try{
+    const { error } = await sb.from('stores').update({ active: true }).eq('store_code', code);
+    if(error) throw error;
+    showMessage(`${code} is active again.`);
+    await loadStoreDirectory();
+    renderStoresPage();
+    renderBaseTable();
+    populateStoreSelect();
+  }catch(e){ console.error(e); showMessage('Could not reactivate store: ' + storesWriteHint(e), true); }
+}
+async function storesPageAddCircle(){
+  const code = (document.getElementById('storesNewCircleCode').value || '').trim().toUpperCase();
+  const name = (document.getElementById('storesNewCircleName').value || '').trim();
+  if(!code){ showMessage('Enter a circle code first.', true); return; }
+  if(allCirclesListWithInactive().includes(code)){ showMessage(`Circle ${code} already exists.`, true); return; }
+  try{
+    const { error } = await sb.from('circles').insert({ code, name: name || code, active: true });
+    if(error) throw error;
+    showMessage(`Circle ${code} added.`);
+    await loadStoreDirectory();
+    renderStoresPage();
+  }catch(e){ console.error(e); showMessage('Could not add circle: ' + storesWriteHint(e), true); }
+}
+async function storesPageSetCircleActive(code, active){
+  if(!active){
+    const stranded = storeDirectory().filter(s => s.circle === code && s.active).map(s => s.code);
+    if(stranded.length){ showMessage(`Move these stores out of ${code} first: ${stranded.join(', ')}`, true); return; }
+  }
+  try{
+    const { error } = await sb.from('circles').update({ active }).eq('code', code);
+    if(error) throw error;
+    showMessage(`Circle ${code} ${active ? 'reactivated' : 'deactivated'}.`);
+    await loadStoreDirectory();
+    renderStoresPage();
+  }catch(e){ console.error(e); showMessage('Could not update circle: ' + storesWriteHint(e), true); }
+}
+async function storesPageAssignStore(userId){
+  const sel = document.getElementById('stores-assign-select-' + userId);
+  const code = sel ? sel.value : '';
+  if(!code){ showMessage('Pick a store to assign first.', true); return; }
+  try{
+    const { error } = await sb.from('user_stores').insert({ user_id: userId, store_code: code });
+    if(error) throw error;
+    renderStoresPage();
+  }catch(e){ console.error(e); showMessage('Could not assign store: ' + errMsg(e), true); }
+}
+async function storesPageUnassignStore(userId, code){
+  try{
+    const { error } = await sb.from('user_stores').delete().eq('user_id', userId).eq('store_code', code);
+    if(error) throw error;
+    renderStoresPage();
+  }catch(e){ console.error(e); showMessage('Could not remove assignment: ' + errMsg(e), true); }
 }
 
 // ---------------- BULK ADMIN ACTIONS ----------------
@@ -1516,6 +1782,11 @@ function errMsg(e){
   return e.message || e.error_description || e.hint || e.details || JSON.stringify(e);
 }
 
+// User-typed text (reopen reasons, store names) rendered into HTML.
+function escapeHtml(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function normHeader(h){ return String(h).trim().toLowerCase(); }
 function findVal(row, aliases){
   for(const key in row){
@@ -1900,7 +2171,7 @@ function showStep(step, skipHistory){
       return;
     }
   }
-  ['setup','scan','mystores','dashboard','admin','profile','compare','approvals','auditreport'].forEach(s => {
+  ['setup','scan','mystores','dashboard','admin','stores','profile','compare','approvals','auditreport'].forEach(s => {
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
   });
@@ -1911,7 +2182,7 @@ function showStep(step, skipHistory){
   const activeTabEl = document.getElementById('tab-'+step);
   const activeParent = activeTabEl && activeTabEl.closest('.nav-parent');
   if(activeParent) activeParent.classList.add('active-parent');
-  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', mystores:'My Stores', dashboard:'Overview', admin:'Users & Stores', profile:'My Account', compare:'Compare Cycles', approvals:'Approvals', auditreport:'Audit Report'};
+  const pageTitles = {setup:'Setup Base Data', scan:'Scan / Upload', mystores:'My Stores', dashboard:'Overview', admin:'Users & Stores', stores:'Stores & Circles', profile:'My Account', compare:'Compare Cycles', approvals:'Approvals', auditreport:'Audit Report'};
   const titleEl = document.getElementById('contentTitle');
   if(titleEl && pageTitles[step]) titleEl.textContent = pageTitles[step];
   const labelEl = document.getElementById('sidebarCurrentPageLabel');
@@ -1925,6 +2196,7 @@ function showStep(step, skipHistory){
   if(step==='approvals') renderApprovalsPage();
   if(step==='dashboard'){ renderDashboard(); if(currentProfile && ['admin','circle_head','client'].includes(currentProfile.role)) startDashboardPolling(); }
   if(step==='admin') renderAdminPanel();
+  if(step==='stores') renderStoresPage();
   if(step==='profile') renderProfilePanel();
   if(step==='compare') renderCycleComparison();
   if(step==='auditreport') renderAuditReportPage();
@@ -1938,7 +2210,7 @@ function showStep(step, skipHistory){
   if(backBtn) backBtn.style.display = history.length > 1 ? '' : 'none';
 }
 
-const VALID_ROUTE_STEPS = ['setup','scan','mystores','dashboard','admin','profile','compare','approvals','auditreport'];
+const VALID_ROUTE_STEPS = ['setup','scan','mystores','dashboard','admin','stores','profile','compare','approvals','auditreport'];
 window.addEventListener('popstate', () => {
   const step = location.hash.replace('#','');
   if(VALID_ROUTE_STEPS.includes(step) && document.getElementById('appRoot').style.display !== 'none'){
@@ -2388,14 +2660,16 @@ function refreshMissingBaseDataNotice(){
     panel.style.display = missing.length ? 'block' : 'none';
     if(countEl) countEl.textContent = missing.length;
     [...selectedMissingBaseStores].forEach(s => { if(!missing.includes(s)) selectedMissingBaseStores.delete(s); });
-    list.innerHTML = missing.map(s => `<div class="missing-base-row" id="missing-base-row-${sanitizeStoreId(s)}">
+    list.innerHTML = missing.map(s => {
+      const isLocked = !!getStoreLock(s);
+      return `<div class="missing-base-row" id="missing-base-row-${sanitizeStoreId(s)}">
         <label class="missing-base-row-check"><input type="checkbox" ${selectedMissingBaseStores.has(s)?'checked':''} onchange="toggleMissingBaseSelect('${s.replace(/'/g,"\\'")}', this.checked)"></label>
-        <div class="missing-base-row-info"><b>${s}</b><span>Circle ${circleFor(s)} · audit submitted, no Inventory or GRN data on file</span></div>
+        <div class="missing-base-row-info"><b>${s}</b><span>Circle ${circleFor(s)} · audit submitted, no Inventory or GRN data on file${isLocked ? ' · locked — reopen to edit' : ''}</span></div>
         <div class="missing-base-row-actions">
-          <button class="btn" onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','inventory')">Declare 0 Inventory</button>
-          <button class="btn" onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','grn')">Declare 0 GRN Pending</button>
+          <button class="btn" ${isLocked ? 'disabled title="Store is locked — reopen it first"' : ''} onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','inventory')">Declare 0 Inventory</button>
+          <button class="btn" ${isLocked ? 'disabled title="Store is locked — reopen it first"' : ''} onclick="declareZeroStock('${s.replace(/'/g,"\\'")}','grn')">Declare 0 GRN Pending</button>
         </div>
-      </div>`).join('');
+      </div>`; }).join('');
     updateMissingBaseDataBulkBar();
   }
 }
@@ -2470,6 +2744,9 @@ function goFixMissingBaseData(store){
 // when a file has a store with a blank serial.
 async function declareZeroStock(store, sourceType){
   if(!requireCycle()) return;
+  // Base-data edit on one store — refused while that store is locked, like
+  // every other edit on a locked store. Reopen it first.
+  if(getStoreLock(store)){ showMessage(`${store} is submitted and locked — reopen it before changing its base data.`, true); return; }
   try{
     // serial_no is NOT NULL in the schema — a zero-stock row is declared with
     // an empty string, exactly like handleBaseUpload already does for a
@@ -2581,6 +2858,7 @@ async function addScan(){
   if(!serial){ return; }
   if(!store){ showMessage('Select a store first.', true); return; }
   if(!requireCycle()) return;
+  if(getStoreLock(store)){ showMessage(`${store} is submitted and locked — reopen it before scanning.`, true); return; }
 
   const queue = getOfflineQueue();
   const isDuplicate = scanData.some(r => r.store === store && normalizeSerial(r.serial) === serial)
@@ -2773,7 +3051,7 @@ function renderApprovalsPage(){
             <div class="btn-row">
               <button class="btn btn-primary" onclick="submitApproval('${l.store.replace(/'/g,"\\'")}','approved')">Approve</button>
               <button class="btn btn-danger" onclick="submitApproval('${l.store.replace(/'/g,"\\'")}','rejected')">Reject</button>
-              <button class="btn" onclick="unlockStore('${l.store.replace(/'/g,"\\'")}')" title="Reopen this store for the auditor to edit">Unlock</button>
+              ${canModerateStore(l.store) ? `<button class="btn" onclick="openReopenDialog('${l.store.replace(/'/g,"\\'")}')" title="Reopen this store for the auditor to edit">Unlock</button>` : ''}
             </div>
           </div>
         </div>
@@ -2852,15 +3130,22 @@ function renderScanView(){
 
   const lockBanner = document.getElementById('lockBanner');
   if(locked){
+    // The banner shows Reopen to whoever may moderate this store (admin:
+    // any store; circle head: only own circles) — previously admin-only,
+    // even though the RLS policy already allowed circle heads to unlock.
+    const canReopen = canModerateStore(store);
     lockBanner.innerHTML = `<div class="lock-banner">
       🔒 <b>${store}</b> was submitted and locked on ${lock.lockedAt}${lock.lockedByEmail ? ' by ' + lock.lockedByEmail : ''}.
-      ${isAdmin ? `<button class="btn" style="margin-left:10px;" onclick="unlockStore('${store.replace(/'/g,"\\'")}')">Unlock this store</button>` : 'No further scans, uploads, or deletions are allowed until an admin reopens it.'}
+      ${canReopen ? `<button class="btn" style="margin-left:10px;" onclick="openReopenDialog('${store.replace(/'/g,"\\'")}')">Reopen audit</button>` : 'No further scans, uploads, or deletions are allowed until an admin or circle head reopens it.'}
     </div>`;
   } else {
     lockBanner.innerHTML = '';
   }
 
-  const inputsDisabled = store ? (locked && !isAdmin) : true;
+  // A locked store is locked for EVERYONE, admins included — previously
+  // the admin carve-out left the serial input, Add button, upload zone
+  // and scan-row delete icons live on a locked store. Reopen first.
+  const inputsDisabled = store ? locked : true;
   document.getElementById('scanInput').disabled = inputsDisabled;
   document.getElementById('scanAddBtn').disabled = inputsDisabled;
   document.getElementById('scanFileInput').disabled = inputsDisabled;
@@ -2883,28 +3168,92 @@ function renderScanView(){
       return `<tr style="opacity:0.7;"><td>${r.serial}</td><td>${r.sku||'—'}</td><td>${r.ts}</td><td><span class="badge badge-open" title="Saved on this device, will sync when back online">Pending sync</span></td></tr>`;
     }
     const isMine = currentUser && r.scannedBy === currentUser.id;
-    const canDelete = (canDeleteAny || isMine) && !(locked && !isAdmin);
+    const canDelete = (canDeleteAny || isMine) && !locked;
     const delIcon = canDelete ? `<span style="color:var(--text-faint);cursor:pointer;" onclick="removeScan('${r.id}')">✕</span>` : '<span style="color:var(--text-faint);">—</span>';
     return `<tr><td>${r.serial}</td><td>${r.sku||'—'}</td><td>${r.ts}</td><td>${delIcon}</td></tr>`;
   }).join('');
 }
 
-async function unlockStore(store){
-  confirmAction('unlock-'+store, `This reopens ${store} for editing`, async () => {
+// ---------------- REOPEN AUDIT ----------------
+// Reopening replaces the old bare "Unlock": the moderator (admin, or the
+// circle head of the store's own circle — same rule as approvals, via
+// canModerateStore) must give a reason, and the superseded lock is kept
+// in store_reopen_history so a reopen never erases what was submitted.
+// The history insert is best-effort: until supabase/add_stores_circles_reopen.sql
+// has been run the table doesn't exist, and the reopen still goes ahead
+// (deleting the lock row already worked before this change).
+let reopenTargetStore = null;
+async function openReopenDialog(store){
+  reopenTargetStore = store;
+  const lock = getStoreLock(store);
+  const infoEl = document.getElementById('reopenStoreInfo');
+  if(infoEl) infoEl.innerHTML = lock
+    ? `<b>${store}</b> — submitted ${lock.lockedAt}${lock.lockedByEmail ? ' by ' + lock.lockedByEmail : ''}${lock.approvalStatus !== 'pending' ? ` · review: ${lock.approvalStatus}` : ''}`
+    : `<b>${store}</b>`;
+  const reasonEl = document.getElementById('reopenReason');
+  if(reasonEl) reasonEl.value = '';
+  const counterEl = document.getElementById('reopenReasonCount');
+  if(counterEl) counterEl.textContent = '0 / 5 characters minimum';
+  const histEl = document.getElementById('reopenHistoryList');
+  if(histEl) histEl.innerHTML = '<div class="empty-note">Loading history…</div>';
+  document.getElementById('reopenModalOverlay').style.display = 'flex';
+  if(histEl){
     try{
-      const { error } = await sb.from('store_locks').delete().eq('cycle_id', currentCycleId).eq('store_code', store);
+      const { data, error } = await sb.from('store_reopen_history').select('*').eq('cycle_id', currentCycleId).eq('store_code', store).order('created_at', {ascending:false}).limit(20);
       if(error) throw error;
-      await fetchCycleData();
-      showMessage(`${store} has been unlocked.`);
-      renderScanView();
-      renderDashboard();
-      renderApprovalsPage();
-      refreshMissingBaseDataNotice();
+      histEl.innerHTML = (data && data.length) ? data.map(h => `<div class="reopen-history-row"><b>${h.created_at ? new Date(h.created_at).toLocaleString() : '—'}</b> · ${h.reopened_by_email || '—'}<br><span>${escapeHtml(h.reason || '')}</span>${h.previous_locked_at ? `<br><span style="color:var(--text-faint);">Superseded submission: locked ${new Date(h.previous_locked_at).toLocaleString()}${h.previous_approval_status ? ` · ${h.previous_approval_status}` : ''}</span>` : ''}</div>`).join('') : '<div class="empty-note">No previous reopens for this store in this cycle.</div>';
     }catch(e){
-      console.error(e);
-      showMessage('Could not unlock store: ' + errMsg(e), true);
+      histEl.innerHTML = '<div class="empty-note">Reopen history will appear here once supabase/add_stores_circles_reopen.sql has been run.</div>';
     }
-  });
+  }
+}
+function closeReopenDialog(){
+  document.getElementById('reopenModalOverlay').style.display = 'none';
+  reopenTargetStore = null;
+}
+function updateReopenReasonCount(){
+  const reasonEl = document.getElementById('reopenReason');
+  const counterEl = document.getElementById('reopenReasonCount');
+  if(reasonEl && counterEl) counterEl.textContent = `${reasonEl.value.trim().length} / 5 characters minimum`;
+}
+async function confirmReopen(btn){
+  const store = reopenTargetStore;
+  if(!store) return;
+  if(!canModerateStore(store)){ showMessage('You can only reopen stores in your own circle(s).', true); return; }
+  const reason = (document.getElementById('reopenReason').value || '').trim();
+  if(reason.length < 5){ showMessage('Please give a reason for reopening (at least 5 characters).', true); return; }
+  setBtnLoading(btn, true);
+  try{
+    const lock = getStoreLock(store);
+    let historySaved = true;
+    try{
+      const { error } = await sb.from('store_reopen_history').insert({
+        cycle_id: currentCycleId, store_code: store,
+        reopened_by: currentUser ? currentUser.id : null,
+        reopened_by_email: currentUser ? currentUser.email : null,
+        reason,
+        previous_locked_at: lock ? lock.lockedAtRaw : null,
+        previous_locked_by_email: lock ? lock.lockedByEmail : null,
+        previous_approval_status: lock ? lock.approvalStatus : null,
+        previous_approval_remark: lock ? (lock.approvalRemark || null) : null
+      });
+      if(error) throw error;
+    }catch(histErr){ historySaved = false; console.warn('Reopen history not saved (migration pending?)', histErr); }
+    const { error } = await sb.from('store_locks').delete().eq('cycle_id', currentCycleId).eq('store_code', store);
+    if(error) throw error;
+    await fetchCycleData();
+    closeReopenDialog();
+    showMessage(historySaved ? `${store} reopened — previous submission kept in reopen history.` : `${store} reopened. (Reopen history was not saved — run supabase/add_stores_circles_reopen.sql to record it.)`);
+    renderScanView();
+    renderDashboard();
+    renderApprovalsPage();
+    refreshMissingBaseDataNotice();
+  }catch(e){
+    console.error(e);
+    showMessage('Could not reopen store: ' + errMsg(e), true);
+  } finally {
+    setBtnLoading(btn, false);
+  }
 }
 
 // A circle head (or admin) approves/rejects a submitted store with an
