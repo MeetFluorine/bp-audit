@@ -495,6 +495,9 @@ async function handleSignOut(){
   unsubscribeRealtime();
   stopDashboardPolling();
   if(sb) await sb.auth.signOut();
+  // Deliberately NOT clearing the saved connected cycle here: signing
+  // back in as the same user restores it (per-user key, so a different
+  // user on a shared device never inherits it).
   currentUser = null; currentProfile = null; myAssignedStores = []; myAssignedCircles = [];
   circleHeadsCache = null; adminViewingCircleHead = null;
   document.body.className = '';
@@ -590,6 +593,23 @@ async function onLoginSuccess(knownUser){
 
     if(profile.role === 'admin') renderAdminPanel();
     startIdleTimer();
+
+    // Restore the connected cycle from the previous sign-in (same user
+    // only — see savedCycleKey). The saved id is re-validated against
+    // audit_cycles first; a missing/unreadable row drops the key and the
+    // sidebar stays "Not connected". A failed restore must never break
+    // sign-in, so everything here is guarded.
+    if(!currentCycleId){
+      try{
+        const saved = readSavedCycle();
+        if(saved){
+          const { data: cycleRow, error: cycleErr } = await sb.from('audit_cycles').select('*').eq('id', saved.id).limit(1);
+          if(!cycleErr && cycleRow && cycleRow.length) await connectToCycle(cycleRow[0]);
+          else clearSavedCycle();
+        }
+      }catch(e){ console.error('Could not restore connected cycle', e); }
+      updateCycleLabels();
+    }
   }catch(e){
     console.error(e);
     document.getElementById('appRoot').style.display = 'none';
@@ -1534,11 +1554,37 @@ function setSaveIndicator(status, extra){
   else { el.textContent = ''; }
 }
 
+// The connected cycle used to live only in memory (currentCycleId), so
+// every sign-out/sign-in or reload dropped back to "Not connected" even
+// though the Supabase auth session itself survived. The cycle is now
+// remembered in localStorage — id + name only, never any token — keyed
+// per user id, so a different user on a shared device never inherits
+// someone else's cycle. It is cleared on disconnect and on cycle delete,
+// but deliberately NOT on sign-out, so signing back in restores it. The
+// saved id is always re-validated against audit_cycles (readable under
+// this user's RLS) before reconnecting; a missing/unreadable row drops
+// the key and leaves the sidebar "Not connected".
+function savedCycleKey(){ return currentUser ? 'pvrecon-cycle-' + currentUser.id : null; }
+function saveConnectedCycle(cycle){
+  try{ const k = savedCycleKey(); if(k) localStorage.setItem(k, JSON.stringify({ id: cycle.id, name: cycle.cycle_name, createdAt: cycle.created_at || null })); }catch(e){}
+}
+function clearSavedCycle(){
+  try{ const k = savedCycleKey(); if(k) localStorage.removeItem(k); }catch(e){}
+}
+function readSavedCycle(){
+  try{
+    const k = savedCycleKey(); if(!k) return null;
+    const raw = localStorage.getItem(k); if(!raw) return null;
+    const v = JSON.parse(raw); return (v && v.id) ? v : null;
+  }catch(e){ return null; }
+}
+
 async function connectToCycle(cycle){
   currentCycleId = cycle.id;
   currentCycleName = cycle.cycle_name;
   currentCycleCreatedAt = cycle.created_at || null;
   auditCompleted = !!cycle.completed;
+  saveConnectedCycle(cycle);
   dashboardStoreFilter = null;
   dashboardCircleFilter = null;
   adminViewingCircleHead = null;
@@ -1639,6 +1685,7 @@ async function handleDeleteCycle(){
 
       if(currentCycleId === existing[0].id){
         currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
+        clearSavedCycle();
         baseData = []; scanData = []; detailResults = []; reconciledStores = []; auditCompleted = false;
         document.getElementById('cycleName').value = '';
         updateCycleLabels();
@@ -3097,7 +3144,27 @@ function renderDashboard(){
   const lockedStoreCodes = new Set(storeLocks.map(l => l.store));
   const pendingStoresEarly = Object.keys(STORE_MASTER).filter(s => !lockedStoreCodes.has(s));
 
-  const auditedCount = isClientUser() ? lockedStoreCodes.size : [...new Set(scanData.map(r=>r.store))].filter(Boolean).length;
+  // Submitted-store count, shared by the Overview "Live — N stores
+  // submitted so far" line below and the sidebar progress widget further
+  // down — both read this one value, so they cannot disagree again.
+  // "Submitted" = a store_locks row in the connected cycle, within the
+  // sidebar's own scope (admin: assigned ∪ base-data stores; client: all
+  // master stores; circle head: own circles; store user: assigned
+  // stores). The Live line previously counted distinct stores with any
+  // scan row instead: a store scanned-but-not-submitted inflated it, a
+  // submitted store with zero scans (genuine zero-stock) was missing
+  // from it, and it moved on every scan/realtime refetch while the
+  // sidebar — correctly — only moved on submit. That is the whole
+  // Live-vs-sidebar divergence: the two lines counted different sets.
+  const totalBaseStores = [...new Set(baseData.map(r=>r.store))].filter(Boolean);
+  const roleScopeForSidebar = currentRoleScopedStores();
+  const sidebarScopeStores = (currentProfile && currentProfile.role === 'admin')
+    ? [...new Set([...allStoreAssignments.map(a=>normalizeStoreCode(a.store_code)), ...totalBaseStores])]
+    : isClientUser() ? Object.keys(STORE_MASTER)
+    : roleScopeForSidebar ? [...roleScopeForSidebar]
+    : myAssignedStores.slice();
+  const submittedStoreCodes = sidebarScopeStores.filter(s => lockedStoreCodes.has(s));
+  const auditedCount = submittedStoreCodes.length;
   const greetTitleEl = document.getElementById('greetTitle');
   const greetSub = document.getElementById('greetSub');
   if(isAppAdmin() && adminViewingCircleHead){
@@ -3123,7 +3190,6 @@ function renderDashboard(){
     }
   }
 
-  const totalBaseStores = [...new Set(baseData.map(r=>r.store))].filter(Boolean);
   const auditedStores = [...new Set(scanData.map(r=>r.store))].filter(Boolean);
   const storesRecorded = auditedStores.length;
 
@@ -3170,22 +3236,14 @@ function renderDashboard(){
   }
 
   // ---- Sidebar audit-progress widget ----
-  // Based on assignments + locks, NOT on whether base data/scans exist for
-  // a store — so a newly-assigned store or a genuine zero-stock store
-  // (locked with nothing to scan) is counted correctly either way.
-  const isAdminUser = currentProfile && currentProfile.role === 'admin';
-  // myAssignedStores is only ever populated for an auditor ('user') login —
-  // a circle head has no per-store assignment list, just circles, so that
-  // branch used to silently fall through to an empty array (permanent
-  // "0 / 0 stores completed"). roleScopedStores (computed above) already
-  // holds exactly the right store set for a circle head — their own
-  // circle(s), or an admin's drilled-in Circle Head territory.
-  const progressScopeStores = isAdminUser
-    ? [...new Set([...allStoreAssignments.map(a=>normalizeStoreCode(a.store_code)), ...totalBaseStores])]
-    : isClientUser() ? Object.keys(STORE_MASTER)
-    : roleScopedStores ? [...roleScopedStores]
-    : myAssignedStores.slice();
-  const progressCompletedStores = progressScopeStores.filter(s => storeLocks.some(l => l.store === s));
+  // Scope + submitted set are computed once at the top of renderDashboard
+  // (shared with the Overview "Live — N stores submitted so far" line),
+  // so the two can never drift apart. Based on assignments + locks, NOT
+  // on whether base data/scans exist for a store — so a newly-assigned
+  // store or a genuine zero-stock store (locked with nothing to scan) is
+  // counted correctly either way.
+  const progressScopeStores = sidebarScopeStores;
+  const progressCompletedStores = submittedStoreCodes;
   const progressPct = progressScopeStores.length ? Math.round((progressCompletedStores.length/progressScopeStores.length)*100) : 0;
   const spPct = document.getElementById('sidebarProgressPct'); if(spPct) spPct.textContent = progressPct + '%';
   const spFill = document.getElementById('sidebarProgressFill'); if(spFill) spFill.style.width = progressPct + '%';
@@ -3837,6 +3895,7 @@ function resetEverything(){
     unsubscribeRealtime();
     stopDashboardPolling();
     currentCycleId = null; currentCycleName = ''; currentCycleCreatedAt = null;
+    clearSavedCycle();
     baseData = []; scanData = []; detailResults = []; reconciledStores = []; auditCompleted = false;
     dashboardStoreFilter = null; dashboardCircleFilter = null; adminViewingCircleHead = null;
     document.getElementById('cycleName').value = '';
@@ -3916,7 +3975,11 @@ wireDropzone('scanUploadZone', 'scanFileInput');
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for Supabase')), 10000));
     const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
     if(session && session.user){
-      await onLoginSuccess();
+      // Pass the already-validated session user straight in: the old
+      // no-arg call re-fetched via getUser(), and a transient failure of
+      // that second round-trip bounced a perfectly valid restored session
+      // to the sign-in screen with "Could not confirm your session".
+      await onLoginSuccess(session.user);
     } else {
       document.getElementById('authScreen').style.display = 'flex';
     }
