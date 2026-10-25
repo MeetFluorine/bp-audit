@@ -289,6 +289,27 @@ function isAppAdmin(){ return !!(currentProfile && currentProfile.role === 'admi
 function isCircleHeadUser(){ return !!(currentProfile && currentProfile.role === 'circle_head'); }
 function isClientUser(){ return !!(currentProfile && currentProfile.role === 'client'); }
 function isAuditorUser(){ return !!(currentProfile && currentProfile.role === 'user'); }
+
+// ---------------- ROUTE GUARDS ----------------
+// Which steps each role may open, enforced at the top of showStep() so a
+// direct URL (#admin, #approvals, ...), Back/Forward, or any programmatic
+// call can never render a page whose menu item is hidden for that role.
+// Menu visibility itself (cap-*/admin-only classes in index.html + CSS) is
+// untouched — this only closes the direct-URL hole behind it.
+// Single source of truth: the sign-in landing below reuses these same maps,
+// so deep-link behaviour at sign-in and later navigation can never disagree.
+// Per role: admin — everything except approvals/mystores; circle_head —
+// dashboard/setup/scan/approvals; client — dashboard only; auditor ('user'
+// role) — setup/scan/mystores. Profile is open to every signed-in role.
+// Fallbacks are each role's home page, and every fallback is in its own
+// role's allowed list, so a guard redirect can never loop.
+const ROUTE_ALLOWED_BY_ROLE = {
+  admin: ['setup','scan','dashboard','admin','profile','compare','auditreport'],
+  circle_head: ['dashboard','setup','scan','approvals','profile'],
+  client: ['dashboard','profile'],
+  user: ['setup','scan','mystores','profile']
+};
+const ROUTE_FALLBACK_BY_ROLE = { admin:'dashboard', circle_head:'dashboard', client:'dashboard', user:'scan' };
 function roleLabel(role){
   return role === 'admin' ? 'Administrator' : role === 'circle_head' ? 'Circle Head' : role === 'client' ? 'Client' : 'Auditor';
 }
@@ -545,16 +566,12 @@ async function onLoginSuccess(knownUser){
     updateTopbarUser();
 
     const requestedStep = location.hash.replace('#','');
-    // Which routes each role is allowed to land on directly (deep link or nav click).
-    // Anything outside this list falls back to that role's default page.
-    const allowedByRole = {
-      admin: ['setup','scan','dashboard','admin','profile','compare','auditreport'],
-      circle_head: ['dashboard','setup','scan','approvals','profile'],
-      client: ['dashboard','profile'],
-      user: ['scan','mystores','profile']
-    };
-    const defaultByRole = { admin:'dashboard', circle_head:'dashboard', client:'dashboard', user:'scan' };
-    const allowed = allowedByRole[profile.role] || allowedByRole.user;
+    // Which routes each role is allowed to land on directly (deep link).
+    // Anything outside this list falls back to that role's home page.
+    // Reuses the ROUTE_* maps enforced by showStep() (see ROUTE GUARDS
+    // above) so sign-in and later navigation can never disagree.
+    const allowed = ROUTE_ALLOWED_BY_ROLE[profile.role] || ROUTE_ALLOWED_BY_ROLE.user;
+    const defaultByRole = ROUTE_FALLBACK_BY_ROLE;
 
     if(profile.role === 'user'){
       const { data: assigned } = await sb.from('user_stores').select('store_code').eq('user_id', user.id);
@@ -1815,6 +1832,27 @@ function updateNavParentVisibility(){
 }
 
 function showStep(step, skipHistory){
+  // Route guard — runs before any view is toggled or rendered, so no
+  // forbidden page's controls ever appear. A blocked step redirects to the
+  // role's home page (dashboard, or scan for auditors, who have no Overview)
+  // with a brief note; the URL is replaced, not pushed, so Back never lands
+  // back on the blocked URL. Unsigned calls (no profile yet — the app shell
+  // is hidden until sign-in) pass through unchanged; the sign-in landing
+  // below applies this same map.
+  if(currentProfile){
+    const allowedSteps = ROUTE_ALLOWED_BY_ROLE[currentProfile.role] || ROUTE_ALLOWED_BY_ROLE.user;
+    if(!allowedSteps.includes(step)){
+      const fallback = ROUTE_FALLBACK_BY_ROLE[currentProfile.role] || ROUTE_FALLBACK_BY_ROLE.user;
+      if(step !== fallback && allowedSteps.includes(fallback)){
+        history.replaceState({step: fallback}, '', '#'+fallback);
+        showStep(fallback, true);
+        showMessage('That page is not available for your role — showing your home page instead.', true);
+      }
+      // If the fallback itself were ever disallowed, bail out rather than
+      // loop: the current (allowed) view simply stays on screen.
+      return;
+    }
+  }
   ['setup','scan','mystores','dashboard','admin','profile','compare','approvals','auditreport'].forEach(s => {
     document.getElementById('view-'+s).classList.toggle('active', s===step);
     document.getElementById('tab-'+s).classList.toggle('active', s===step);
