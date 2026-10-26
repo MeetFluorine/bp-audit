@@ -3492,8 +3492,8 @@ async function loadCircleHeadsForAdmin(){
 // KPI/table on screen agrees) and downloadExcel (so the "Download Excel
 // report" button never leaks another circle head's data).
 function currentRoleScopedStores(){
-  if(isCircleHeadUser()) return new Set(Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s))));
-  if(isAppAdmin() && adminViewingCircleHead) return new Set(Object.keys(STORE_MASTER).filter(s => adminViewingCircleHead.circles.includes(circleFor(s))));
+  if(isCircleHeadUser()) return new Set(Object.keys(STORE_MASTER).filter(s => myAssignedCircles.includes(circleFor(s)) && storeEntry(s)?.active !== false));
+  if(isAppAdmin() && adminViewingCircleHead) return new Set(Object.keys(STORE_MASTER).filter(s => adminViewingCircleHead.circles.includes(circleFor(s)) && storeEntry(s)?.active !== false));
   return null;
 }
 
@@ -3516,7 +3516,7 @@ function renderDashboard(){
   // down — both read this one value, so they cannot disagree again.
   // "Submitted" = a store_locks row in the connected cycle, within the
   // sidebar's own scope (admin: assigned ∪ base-data stores; client: all
-  // master stores; circle head: own circles; store user: assigned
+  // ACTIVE master stores; circle head: own circles; store user: assigned
   // stores). The Live line previously counted distinct stores with any
   // scan row instead: a store scanned-but-not-submitted inflated it, a
   // submitted store with zero scans (genuine zero-stock) was missing
@@ -3525,11 +3525,15 @@ function renderDashboard(){
   // Live-vs-sidebar divergence: the two lines counted different sets.
   const totalBaseStores = [...new Set(baseData.map(r=>r.store))].filter(Boolean);
   const roleScopeForSidebar = currentRoleScopedStores();
-  const sidebarScopeStores = (currentProfile && currentProfile.role === 'admin')
+  // Scope is ACTIVE stores only — same rule as pending: a deactivated
+  // store must not appear in progress, the Live line, or any KPI total,
+  // for any role. (Unknown codes without a directory row are kept: the
+  // !== false check only drops stores explicitly deactivated.)
+  const sidebarScopeStores = ((currentProfile && currentProfile.role === 'admin')
     ? [...new Set([...allStoreAssignments.map(a=>normalizeStoreCode(a.store_code)), ...totalBaseStores])]
     : isClientUser() ? Object.keys(STORE_MASTER)
     : roleScopeForSidebar ? [...roleScopeForSidebar]
-    : myAssignedStores.slice();
+    : myAssignedStores.slice()).filter(s => storeEntry(s)?.active !== false);
   const submittedStoreCodes = sidebarScopeStores.filter(s => lockedStoreCodes.has(s));
   const auditedCount = submittedStoreCodes.length;
   const greetTitleEl = document.getElementById('greetTitle');
@@ -3691,7 +3695,7 @@ function renderDashboard(){
       spark: sparklineBarsSVG(varianceTrend, cRed, true) }
   ];
   const kpiCardsFinal = clientLiveGate
-    ? [{ cls:'k-pending', label:'Audit Progress', value: `${lockedStoreCodes.size}/${Object.keys(STORE_MASTER).length}`, sub:'Stores submitted so far',
+    ? [{ cls:'k-pending', label:'Audit Progress', value: `${submittedStoreCodes.length}/${sidebarScopeStores.length}`, sub:'Stores submitted so far',
         trend:'flat', trendLabel: 'Live cycle — detail on completion',
         icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
         spark: sparklineBarsSVG(pendingTrend, cAmber, true) }]
@@ -3731,7 +3735,7 @@ function renderDashboard(){
       <p class="store-tag-meta">Circle ${circleFor(store)} · Expected ${t-ex} · Found ${t-sh}${grnNote}</p>
       <div class="store-tag-stats"><span>Match <b>${pct.toFixed(2)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span></div>
       ${stamp}</div></div>`;
-  }).join('') : `<div class="empty-note">${clientLiveGate ? `Cycle in progress — ${lockedStoreCodes.size} of ${Object.keys(STORE_MASTER).length} stores submitted so far. Full results appear here once the cycle is marked complete.` : dashboardCircleFilter ? `No audited stores in ${dashboardCircleFilter} yet.` : 'No stores scanned yet — complete at least one store in Scan / Upload to see results here.'}</div>`;
+  }).join('') : `<div class="empty-note">${clientLiveGate ? `Cycle in progress — ${submittedStoreCodes.length} of ${sidebarScopeStores.length} stores submitted so far. Full results appear here once the cycle is marked complete.` : dashboardCircleFilter ? `No audited stores in ${dashboardCircleFilter} yet.` : 'No stores scanned yet — complete at least one store in Scan / Upload to see results here.'}</div>`;
 
   // ---- Circle Summary / Circle Head Summary rollup ----
   // Admin sees cards grouped by the PERSON managing a circle (Circle Head
@@ -3759,7 +3763,7 @@ function renderDashboard(){
       const allCircles = [...new Set(Object.values(STORE_MASTER))].sort();
       if(clientLiveGate){
         rollupEl.innerHTML = allCircles.map(circle => {
-          const circleStores = Object.keys(STORE_MASTER).filter(s => circleFor(s) === circle);
+          const circleStores = Object.keys(STORE_MASTER).filter(s => circleFor(s) === circle && storeEntry(s)?.active !== false);
           const circleLocked = circleStores.filter(s => lockedStoreCodes.has(s));
           const pct = circleStores.length ? (circleLocked.length/circleStores.length*100) : 0;
           const cls = pct >= 100 ? 'circle-rollup-card-match' : pct > 0 ? 'circle-rollup-card-variance' : 'circle-rollup-card-notstarted';
