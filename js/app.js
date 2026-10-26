@@ -3363,8 +3363,8 @@ function rollupStatusClass(auditedCount, shortCount, excessCount, totalRows){
 
 function renderCircleCards(circles){
   const cards = circles.slice().sort().map(circle => {
-    const circleAllStores = Object.keys(STORE_MASTER).filter(s => circleFor(s) === circle);
-    const circleAuditedStores = reconciledStores.filter(s => circleFor(s) === circle);
+    const circleAllStores = activeStoreCodes().filter(s => circleFor(s) === circle);
+    const circleAuditedStores = reconciledStores.filter(s => circleFor(s) === circle && storeEntry(s)?.active !== false);
     const rows = circleAuditedStores.flatMap(s => detailResults.filter(r => r.store === s));
     const m = rows.filter(r=>r.status==='match').length;
     const sh = rows.filter(r=>r.status==='short').length;
@@ -3388,53 +3388,64 @@ function renderCircleCards(circles){
 // they're assigned to — plus an "Unassigned" card for any circle with no
 // circle head at all, so nothing silently disappears from view. Clicking a
 // card drills into that person's full territory via renderCircleCards above.
+// Circle Head Summary card markup — one shared builder so head cards, the
+// Unassigned card and the empty-state card all share the new compact 168px
+// design. Click behaviour is unchanged: a card drills into that territory.
+// Avatar: the Circle Head's existing profile picture (profiles.avatar_url);
+// navy initials when none is set or the image fails to load (never a broken
+// icon: the <img> removes itself on error, revealing the initials behind it).
+function circleHeadCardHtml(o){
+  const avatar = o.avatarUrl
+    ? `<span class="circle-head-avatar">${o.initials}<img src="${escapeHtml(o.avatarUrl)}" alt="" loading="lazy" decoding="async" onerror="this.remove()"></span>`
+    : `<span class="circle-head-avatar">${o.initials}</span>`;
+  const bottom = o.note
+    ? `<div class="not-started-message">${o.note}</div>`
+    : o.notStarted
+      ? `<div class="not-started-message">Not submitted / Not audited yet</div>`
+      : `<div class="circle-head-metrics"><span class="circle-head-metric">Match <strong>${o.matchPct}</strong></span><span class="circle-head-metric">Short <strong class="${o.short > 0 ? 'metric-danger' : ''}">${o.short}</strong></span><span class="circle-head-metric">Excess <strong>${o.excess}</strong></span></div>`;
+  return `<div class="circle-head-card ${o.cardClass}" onclick='${o.onclick}'>
+    <div class="circle-head-card__top"><div class="circle-head-identity">${avatar}<span class="circle-head-namewrap"><span class="circle-head-name">${o.name}</span><span class="circle-head-regions">${o.regions}</span></span></div><span class="circle-status ${o.pillClass}">${o.pill}</span></div>
+    <div class="circle-head-progress-group"><div class="circle-head-progress-text">${o.progressText}</div><div class="circle-progress-track"><div class="circle-progress-fill" style="width:${o.progressPct}%;"></div></div></div>
+    ${bottom}
+  </div>`;
+}
+
+// Admin-only: one card per Circle Head, aggregated across every circle
+// they're assigned to — plus an "Unassigned" card for any circle with no
+// circle head at all, so nothing silently disappears from view. Clicking a
+// card drills into that person's full territory via renderCircleCards above.
+// Store counts use ACTIVE stores only, so a deactivated store leaves both
+// the audited count and the total (same rule as the pending fix).
 function renderCircleHeadCards(){
   if(!circleHeadsCache || !circleHeadsCache.length){
     const allCircles = [...new Set(Object.values(STORE_MASTER))];
     return `<div class="empty-note">No Circle Heads set up yet — assign the role and circles from Users &amp; Stores. Showing ${allCircles.length} unassigned circle${allCircles.length===1?'':'s'}.</div>` +
-    `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})'>
-        <span class="circle-rollup-status-pill">Unassigned</span>
-        <div class="circle-rollup-name">Unassigned</div>
-        <div class="circle-rollup-meta">${allCircles.length} circle${allCircles.length===1?'':'s'} · no Circle Head yet</div>
-      </div>`;
+    `<div class="circle-head-grid">${circleHeadCardHtml({ cardClass: 'circle-head-card--notstarted', pillClass: 'status-unassigned', pill: 'Unassigned', name: 'Unassigned', initials: '?', avatarUrl: null, regions: allCircles.join(', '), progressText: `${allCircles.length} circle${allCircles.length===1?'':'s'}`, progressPct: 0, note: 'No Circle Head yet', onclick: `viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})` })}</div>`;
   }
   const assignedCircles = new Set(circleHeadsCache.flatMap(h => h.circles));
   const unassigned = [...new Set(Object.values(STORE_MASTER))].filter(c => !assignedCircles.has(c));
+  const statusMap = {
+    'circle-rollup-card-notstarted': { card: 'circle-head-card--notstarted', pill: 'status-not-started', label: 'Not started', notStarted: true },
+    'circle-rollup-card-critical': { card: 'circle-head-card--critical', pill: 'status-critical', label: 'Critical' },
+    'circle-rollup-card-variance': { card: 'circle-head-card--variance', pill: 'status-needs-review', label: 'Needs review' },
+    'circle-rollup-card-match': { card: 'circle-head-card--match', pill: 'status-on-track', label: 'On track' },
+  };
   const headCards = circleHeadsCache.map(head => {
     if(!head.circles.length) return '';
-    const headStores = Object.keys(STORE_MASTER).filter(s => head.circles.includes(circleFor(s)));
-    const headAudited = reconciledStores.filter(s => head.circles.includes(circleFor(s)));
+    const headStores = activeStoreCodes().filter(s => head.circles.includes(circleFor(s)));
+    const headAudited = reconciledStores.filter(s => head.circles.includes(circleFor(s)) && storeEntry(s)?.active !== false);
     const rows = headAudited.flatMap(s => detailResults.filter(r => r.store === s));
     const m = rows.filter(r=>r.status==='match').length;
     const sh = rows.filter(r=>r.status==='short').length;
     const ex = rows.filter(r=>r.status==='excess').length;
     const pct = (m+sh+ex) ? (m/(m+sh+ex)*100) : 100;
     const completionPct = headStores.length ? (headAudited.length/headStores.length*100) : 0;
-    // 0 audited stores is "hasn't started/submitted yet" — a very different
-    // situation from "100% match", which is what m/sh/ex all being 0 reads
-    // as. Say so plainly instead of implying everything's fine.
-    const statsLine = headAudited.length === 0
-      ? `<span class="circle-rollup-not-started">Not submitted / Not audited yet</span>`
-      : `<span>Match <b>${pct.toFixed(1)}%</b></span><span>Short <b>${sh}</b></span><span>Excess <b>${ex}</b></span>`;
-    const statusCls = rollupStatusClass(headAudited.length, sh, ex, m+sh+ex);
-    const statusLabel = statusCls === 'circle-rollup-card-notstarted' ? 'Not started'
-      : statusCls === 'circle-rollup-card-critical' ? 'Critical'
-      : statusCls === 'circle-rollup-card-variance' ? 'Needs review'
-      : 'On track';
-    return `<div class="circle-rollup-card ${statusCls}" onclick='viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})'>
-      <span class="circle-rollup-status-pill">${statusLabel}</span>
-      <div class="circle-rollup-name">${head.name}</div>
-      <div class="circle-rollup-meta">${head.circles.join(', ')} · ${headAudited.length}/${headStores.length} stores audited · ${completionPct.toFixed(0)}% complete</div>
-      <div class="circle-rollup-progress-track"><div class="circle-rollup-progress-fill" style="width:${completionPct.toFixed(0)}%;"></div></div>
-      <div class="circle-rollup-stats">${statsLine}</div>
-    </div>`;
+    const st = statusMap[rollupStatusClass(headAudited.length, sh, ex, m+sh+ex)];
+    return circleHeadCardHtml({ cardClass: st.card, pillClass: st.pill, pill: st.label, name: head.name, initials: head.initials, avatarUrl: head.avatarUrl, regions: head.circles.join(', '), progressText: `${headAudited.length} / ${headStores.length} stores audited · ${completionPct.toFixed(0)}% complete`, progressPct: completionPct.toFixed(0), notStarted: !!st.notStarted, matchPct: pct.toFixed(1) + '%', short: sh, excess: ex, onclick: `viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})` });
   }).join('');
-  const unassignedCard = unassigned.length ? `<div class="circle-rollup-card circle-rollup-card-notstarted" onclick='viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})'>
-      <span class="circle-rollup-status-pill">Unassigned</span>
-      <div class="circle-rollup-name">Unassigned</div>
-      <div class="circle-rollup-meta">${unassigned.join(', ')} · no Circle Head yet</div>
-    </div>` : '';
-  return (headCards + unassignedCard) || '<div class="empty-note">No circle heads or circles to show.</div>';
+  const unassignedCard = unassigned.length ? circleHeadCardHtml({ cardClass: 'circle-head-card--notstarted', pillClass: 'status-unassigned', pill: 'Unassigned', name: 'Unassigned', initials: '?', avatarUrl: null, regions: unassigned.join(', '), progressText: `${unassigned.length} circle${unassigned.length===1?'':'s'}`, progressPct: 0, note: 'No Circle Head yet', onclick: `viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})` }) : '';
+  const cards = headCards + unassignedCard;
+  return cards ? `<div class="circle-head-grid">${cards}</div>` : '<div class="empty-note">No circle heads or circles to show.</div>';
 }
 
 function viewCircleHeadTerritory(id, name, circles){
@@ -3451,13 +3462,15 @@ function clearCircleHeadDrill(){
 async function loadCircleHeadsForAdmin(){
   try{
     const [{ data: heads, error: e1 }, { data: assignments, error: e2 }] = await Promise.all([
-      sb.from('profiles').select('id,email,full_name').eq('role','circle_head').eq('approved', true),
+      sb.from('profiles').select('id,email,full_name,avatar_url').eq('role','circle_head').eq('approved', true),
       sb.from('user_circles').select('*')
     ]);
     if(e1) throw e1; if(e2) throw e2;
     circleHeadsCache = (heads || []).map(h => ({
       id: h.id,
       name: displayNameFor(h.email, h.full_name),
+      initials: initialsFor(h.email, h.full_name),
+      avatarUrl: h.avatar_url || null,
       circles: (assignments || []).filter(a => a.user_id === h.id).map(a => a.circle)
     }));
   }catch(e){
@@ -3491,7 +3504,11 @@ function renderDashboard(){
   // for an incomplete cycle read back empty for a client by design. Computing this first
   // means every "how many stores so far" message below is accurate for every role.
   const lockedStoreCodes = new Set(storeLocks.map(l => l.store));
-  const pendingStoresEarly = Object.keys(STORE_MASTER).filter(s => !lockedStoreCodes.has(s));
+  // Pending counts ACTIVE stores only — a deactivated store is out of the
+  // audit run, so it must not inflate "Audit Pending", the bell badge, or
+  // the Stores Pending Audit panel. (Same rule as the directory comment:
+  // operational lists use active stores; reports/history keep inactive.)
+  const pendingStoresEarly = activeStoreCodes().filter(s => !lockedStoreCodes.has(s));
 
   // Submitted-store count, shared by the Overview "Live — N stores
   // submitted so far" line below and the sidebar progress widget further
@@ -3549,7 +3566,7 @@ function renderDashboard(){
   // number on the page, not just the store-card grid below.
   let roleScopedStores = currentRoleScopedStores();
 
-  // "Pending" is measured against the full store master list minus whatever's
+  // "Pending" is measured against the ACTIVE store list minus whatever's
   // actually been locked/submitted — not against which stores happen to have
   // base data uploaded, since a store can be legitimately audited (locked)
   // with zero expected/scanned items.
