@@ -3388,28 +3388,31 @@ function renderCircleCards(circles){
 // they're assigned to — plus an "Unassigned" card for any circle with no
 // circle head at all, so nothing silently disappears from view. Clicking a
 // card drills into that person's full territory via renderCircleCards above.
-// Circle Head Summary card markup — one shared builder so head cards, the
-// Unassigned card and the empty-state card all share the new compact 168px
-// design. Click behaviour is unchanged: a card drills into that territory.
-// Avatar: the Circle Head's existing profile picture (profiles.avatar_url);
-// navy initials when none is set or the image fails to load (never a broken
-// icon: the <img> removes itself on error, revealing the initials behind it).
+// Circle Head Summary card markup — name-first, NO avatars (spec v2): the
+// name is the card's identity, the status pill sits beside it, and regions,
+// audit info, progress bar and metrics stack below in fixed order with
+// margin spacing only — no absolute positioning, so nothing can overlap.
+// Metrics are two-line columns (label above value), which is what keeps
+// "Match 54.7% / Short 1414 / Excess 95" from colliding in a narrow card.
 function circleHeadCardHtml(o){
-  const avatar = o.avatarUrl
-    ? `<span class="circle-head-avatar">${o.initials}<img src="${escapeHtml(o.avatarUrl)}" alt="" loading="lazy" decoding="async" onerror="this.remove()"></span>`
-    : `<span class="circle-head-avatar">${o.initials}</span>`;
   const bottom = o.note
     ? `<div class="not-started-message">${o.note}</div>`
     : o.notStarted
       ? `<div class="not-started-message">Not submitted / Not audited yet</div>`
-      : `<div class="circle-head-metrics"><span class="circle-head-metric">Match <strong>${o.matchPct}</strong></span><span class="circle-head-metric">Short <strong class="${o.short > 0 ? 'metric-danger' : ''}">${o.short}</strong></span><span class="circle-head-metric">Excess <strong>${o.excess}</strong></span></div>`;
+      : `<div class="circle-head-metrics"><span class="circle-head-metric"><span class="metric-label">Match</span><span class="metric-value">${o.matchPct}</span></span><span class="circle-head-metric"><span class="metric-label">Short</span><span class="metric-value${o.short > 0 ? ' short-value' : ''}">${o.short}</span></span><span class="circle-head-metric"><span class="metric-label">Excess</span><span class="metric-value">${o.excess}</span></span></div>`;
   return `<div class="circle-head-card ${o.cardClass}" onclick='${o.onclick}'>
-    <div class="circle-head-card__top"><div class="circle-head-identity">${avatar}<span class="circle-head-namewrap"><span class="circle-head-name">${o.name}</span><span class="circle-head-regions">${o.regions}</span></span></div><span class="circle-status ${o.pillClass}">${o.pill}</span></div>
-    <div class="circle-head-progress-group"><div class="circle-head-progress-text">${o.progressText}</div><div class="circle-progress-track"><div class="circle-progress-fill" style="width:${o.progressPct}%;"></div></div></div>
+    <div class="circle-head-card__top"><span class="circle-head-name">${o.name}</span><span class="circle-status ${o.pillClass}">${o.pill}</span></div>
+    <div class="circle-head-regions">${o.regions}</div>
+    <div class="circle-head-progress-text">${o.progressText}</div>
+    <div class="circle-progress-track"><div class="circle-progress-fill" style="width:${o.progressPct}%;"></div></div>
     ${bottom}
   </div>`;
 }
 
+// Admin-only: one card per Circle Head, aggregated across every circle
+// they're assigned to — plus an "Unassigned" card for any circle with no
+// circle head at all, so nothing silently disappears from view. Clicking a
+// card drills into that person's full territory via renderCircleCards above.
 // Admin-only: one card per Circle Head, aggregated across every circle
 // they're assigned to — plus an "Unassigned" card for any circle with no
 // circle head at all, so nothing silently disappears from view. Clicking a
@@ -3420,7 +3423,7 @@ function renderCircleHeadCards(){
   if(!circleHeadsCache || !circleHeadsCache.length){
     const allCircles = [...new Set(Object.values(STORE_MASTER))];
     return `<div class="empty-note">No Circle Heads set up yet — assign the role and circles from Users &amp; Stores. Showing ${allCircles.length} unassigned circle${allCircles.length===1?'':'s'}.</div>` +
-    `<div class="circle-head-grid">${circleHeadCardHtml({ cardClass: 'circle-head-card--notstarted', pillClass: 'status-unassigned', pill: 'Unassigned', name: 'Unassigned', initials: '?', avatarUrl: null, regions: allCircles.join(', '), progressText: `${allCircles.length} circle${allCircles.length===1?'':'s'}`, progressPct: 0, note: 'No Circle Head yet', onclick: `viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})` })}</div>`;
+    `<div class="circle-head-grid">${circleHeadCardHtml({ cardClass: 'circle-head-card--notstarted', pillClass: 'status-unassigned', pill: 'Unassigned', name: 'Unassigned', regions: allCircles.join(', '), progressText: `${allCircles.length} circle${allCircles.length===1?'':'s'}`, progressPct: 0, note: 'No Circle Head yet', onclick: `viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(allCircles)})` })}</div>`;
   }
   const assignedCircles = new Set(circleHeadsCache.flatMap(h => h.circles));
   const unassigned = [...new Set(Object.values(STORE_MASTER))].filter(c => !assignedCircles.has(c));
@@ -3441,9 +3444,9 @@ function renderCircleHeadCards(){
     const pct = (m+sh+ex) ? (m/(m+sh+ex)*100) : 100;
     const completionPct = headStores.length ? (headAudited.length/headStores.length*100) : 0;
     const st = statusMap[rollupStatusClass(headAudited.length, sh, ex, m+sh+ex)];
-    return circleHeadCardHtml({ cardClass: st.card, pillClass: st.pill, pill: st.label, name: head.name, initials: head.initials, avatarUrl: head.avatarUrl, regions: head.circles.join(', '), progressText: `${headAudited.length} / ${headStores.length} stores audited · ${completionPct.toFixed(0)}% complete`, progressPct: completionPct.toFixed(0), notStarted: !!st.notStarted, matchPct: pct.toFixed(1) + '%', short: sh, excess: ex, onclick: `viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})` });
+    return circleHeadCardHtml({ cardClass: st.card, pillClass: st.pill, pill: st.label, name: head.name, regions: head.circles.join(', '), progressText: `${headAudited.length} / ${headStores.length} stores audited · ${completionPct.toFixed(0)}% complete`, progressPct: completionPct.toFixed(0), notStarted: !!st.notStarted, matchPct: pct.toFixed(1) + '%', short: sh, excess: ex, onclick: `viewCircleHeadTerritory("${head.id}", ${JSON.stringify(head.name)}, ${JSON.stringify(head.circles)})` });
   }).join('');
-  const unassignedCard = unassigned.length ? circleHeadCardHtml({ cardClass: 'circle-head-card--notstarted', pillClass: 'status-unassigned', pill: 'Unassigned', name: 'Unassigned', initials: '?', avatarUrl: null, regions: unassigned.join(', '), progressText: `${unassigned.length} circle${unassigned.length===1?'':'s'}`, progressPct: 0, note: 'No Circle Head yet', onclick: `viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})` }) : '';
+  const unassignedCard = unassigned.length ? circleHeadCardHtml({ cardClass: 'circle-head-card--notstarted', pillClass: 'status-unassigned', pill: 'Unassigned', name: 'Unassigned', regions: unassigned.join(', '), progressText: `${unassigned.length} circle${unassigned.length===1?'':'s'}`, progressPct: 0, note: 'No Circle Head yet', onclick: `viewCircleHeadTerritory(null, "Unassigned circles", ${JSON.stringify(unassigned)})` }) : '';
   const cards = headCards + unassignedCard;
   return cards ? `<div class="circle-head-grid">${cards}</div>` : '<div class="empty-note">No circle heads or circles to show.</div>';
 }
@@ -3462,15 +3465,13 @@ function clearCircleHeadDrill(){
 async function loadCircleHeadsForAdmin(){
   try{
     const [{ data: heads, error: e1 }, { data: assignments, error: e2 }] = await Promise.all([
-      sb.from('profiles').select('id,email,full_name,avatar_url').eq('role','circle_head').eq('approved', true),
+      sb.from('profiles').select('id,email,full_name').eq('role','circle_head').eq('approved', true),
       sb.from('user_circles').select('*')
     ]);
     if(e1) throw e1; if(e2) throw e2;
     circleHeadsCache = (heads || []).map(h => ({
       id: h.id,
       name: displayNameFor(h.email, h.full_name),
-      initials: initialsFor(h.email, h.full_name),
-      avatarUrl: h.avatar_url || null,
       circles: (assignments || []).filter(a => a.user_id === h.id).map(a => a.circle)
     }));
   }catch(e){
